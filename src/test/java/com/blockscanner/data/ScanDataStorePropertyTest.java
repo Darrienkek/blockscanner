@@ -33,7 +33,7 @@ public class ScanDataStorePropertyTest {
         
         // Add the same block multiple times with different timestamps
         for (int i = 0; i < duplicateCount; i++) {
-            ScanResult result = new ScanResult(blockType, x, y, z, dimension, System.currentTimeMillis() + i);
+            ScanResult result = new ScanResult(blockType, x, y, z, dimension, System.currentTimeMillis() + i, null);
             store.addFoundBlock(result);
         }
         

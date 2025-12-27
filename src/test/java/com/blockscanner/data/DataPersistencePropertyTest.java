@@ -118,7 +118,11 @@ class DataPersistencePropertyTest {
             Arbitraries.integers().between(-64, 320),
             Arbitraries.integers().between(-30000000, 30000000),
             Arbitraries.of("minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"),
-            Arbitraries.longs().greaterOrEqual(0)
+            Arbitraries.longs().greaterOrEqual(0),
+            Arbitraries.oneOf(
+                Arbitraries.just(null),
+                Arbitraries.strings().withChars('a', 'z').ofMinLength(0).ofMaxLength(100)
+            )
         ).as(ScanResult::new);
     }
 

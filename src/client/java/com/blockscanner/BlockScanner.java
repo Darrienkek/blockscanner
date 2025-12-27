@@ -2,14 +2,22 @@ package com.blockscanner;
 
 import com.blockscanner.data.ScanDataStore;
 import com.blockscanner.data.ScanResult;
+import net.minecraft.block.AbstractSignBlock;
 import net.minecraft.block.Block;
-import net.minecraft.block.Blocks;
+import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.block.entity.SignBlockEntity;
+import net.minecraft.block.entity.SignText;
+import net.minecraft.registry.Registries;
+import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
 import net.minecraft.world.World;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.Chunk;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,6 +31,9 @@ public class BlockScanner {
     private final ScanDataStore dataStore;
     private final Queue<ChunkPos> scanQueue = new ConcurrentLinkedQueue<>();
     private final Set<String> queuedChunks = ConcurrentHashMap.newKeySet();
+    private final Set<String> targetBlockIds = ConcurrentHashMap.newKeySet();
+    private volatile boolean rescanScannedChunks = false;
+    private volatile boolean scanSigns = false;
     private static final int MAX_QUEUE_SIZE = 200;
     
     public BlockScanner(ScanDataStore dataStore) {
@@ -37,22 +48,64 @@ public class BlockScanner {
     public ScanDataStore getDataStore() {
         return dataStore;
     }
+
+    public synchronized String setTargetBlocks(List<String> blockIds) {
+        if (blockIds == null || blockIds.isEmpty()) {
+            return "targetBlocks must include at least one block id";
+        }
+
+        Set<String> resolved = ConcurrentHashMap.newKeySet();
+        List<String> invalidIds = new ArrayList<>();
+        for (String blockId : blockIds) {
+            if (blockId == null || blockId.isBlank()) {
+                continue;
+            }
+            Identifier identifier = Identifier.tryParse(blockId.trim());
+            if (identifier == null) {
+                invalidIds.add(blockId);
+                continue;
+            }
+            resolved.add(identifier.toString());
+        }
+
+        if (!invalidIds.isEmpty()) {
+            return "Unknown block id(s): " + String.join(", ", invalidIds);
+        }
+
+        if (resolved.isEmpty()) {
+            return "targetBlocks must include at least one valid block id";
+        }
+
+        targetBlockIds.clear();
+        targetBlockIds.addAll(resolved);
+        return null;
+    }
+
+    public void setRescanScannedChunks(boolean rescanScannedChunks) {
+        this.rescanScannedChunks = rescanScannedChunks;
+    }
+
+    public void setScanSigns(boolean scanSigns) {
+        this.scanSigns = scanSigns;
+    }
     
     /**
-     * Checks if a block is a target block (barrier or command block).
+     * Checks if a block is a target block.
      * 
      * @param block The block to check
-     * @return true if the block is a barrier or command block, false otherwise
+     * @return true if the block is a configured target block, false otherwise
      */
     public boolean isTargetBlock(Block block) {
         if (block == null) {
             return false;
         }
+
+        if (scanSigns && isSignBlock(block)) {
+            return true;
+        }
         
-        return block == Blocks.BARRIER ||
-               block == Blocks.COMMAND_BLOCK ||
-               block == Blocks.CHAIN_COMMAND_BLOCK ||
-               block == Blocks.REPEATING_COMMAND_BLOCK;
+        String blockId = getBlockTypeName(block);
+        return targetBlockIds.contains(blockId);
     }
     
     /**
@@ -88,7 +141,10 @@ public class BlockScanner {
                 if (scanQueue.size() >= MAX_QUEUE_SIZE) {
                     return;
                 }
-                if (!dataStore.isChunkScanned(x, z, dimension)) {
+                if (!rescanScannedChunks && dataStore.isChunkScanned(x, z, dimension)) {
+                    continue;
+                }
+                {
                     String key = dimension + ":" + x + "," + z;
                     if (queuedChunks.add(key)) {
                         scanQueue.offer(pos);
@@ -134,7 +190,7 @@ public class BlockScanner {
         
         String dimension = world.getRegistryKey().getValue().toString();
         
-        if (dataStore.isChunkScanned(pos.x, pos.z, dimension)) {
+        if (!rescanScannedChunks && dataStore.isChunkScanned(pos.x, pos.z, dimension)) {
             return;
         }
         
@@ -155,18 +211,21 @@ public class BlockScanner {
                     
                     if (isTargetBlock(block)) {
                         String blockType = getBlockTypeName(block);
+                        String signText = getSignText(world, blockPos);
                         ScanResult result = new ScanResult(
                             blockType,
                             blockPos.getX(),
                             blockPos.getY(),
                             blockPos.getZ(),
                             dimension,
-                            System.currentTimeMillis()
+                            System.currentTimeMillis(),
+                            signText
                         );
                         
                         dataStore.addFoundBlock(result);
                         blocksFound++;
                         BlockScannerMod.LOGGER.info("Found {} at {}, {}, {} in {}", blockType, blockPos.getX(), blockPos.getY(), blockPos.getZ(), dimension);
+                        sendFoundBlockMessage(blockType, blockPos);
                     }
                 }
             }
@@ -184,16 +243,72 @@ public class BlockScanner {
      * @return The string name of the block type
      */
     private String getBlockTypeName(Block block) {
-        if (block == Blocks.BARRIER) {
-            return "barrier";
-        } else if (block == Blocks.COMMAND_BLOCK) {
-            return "command_block";
-        } else if (block == Blocks.CHAIN_COMMAND_BLOCK) {
-            return "chain_command_block";
-        } else if (block == Blocks.REPEATING_COMMAND_BLOCK) {
-            return "repeating_command_block";
+        if (block == null) {
+            return "unknown";
         }
-        return "unknown";
+        Identifier id = Registries.BLOCK.getId(block);
+        return id != null ? id.toString() : "unknown";
+    }
+
+    private boolean isSignBlock(Block block) {
+        return block instanceof AbstractSignBlock;
+    }
+
+    private String getSignText(World world, BlockPos blockPos) {
+        BlockEntity blockEntity = world.getBlockEntity(blockPos);
+        if (!(blockEntity instanceof SignBlockEntity signBlockEntity)) {
+            return null;
+        }
+
+        String frontText = readSignSide(signBlockEntity.getFrontText());
+        String backText = readSignSide(signBlockEntity.getBackText());
+
+        boolean hasFront = frontText != null && !frontText.isBlank();
+        boolean hasBack = backText != null && !backText.isBlank();
+
+        if (hasFront && hasBack) {
+            return "Front: " + frontText + "\nBack: " + backText;
+        }
+        if (hasFront) {
+            return frontText;
+        }
+        if (hasBack) {
+            return backText;
+        }
+        return null;
+    }
+
+    private String readSignSide(SignText signText) {
+        if (signText == null) {
+            return null;
+        }
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < 4; i++) {
+            Text line = signText.getMessage(i, false);
+            if (line == null) {
+                continue;
+            }
+            String text = line.getString();
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append('\n');
+            }
+            builder.append(text);
+        }
+        return builder.length() > 0 ? builder.toString() : null;
+    }
+
+    private void sendFoundBlockMessage(String blockType, BlockPos blockPos) {
+        if (blockType == null || blockPos == null) {
+            return;
+        }
+        net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
+        if (client.player != null) {
+            String message = "[Block Scanner] Found " + blockType + " at " + blockPos.getX() + ", " + blockPos.getY() + ", " + blockPos.getZ();
+            client.player.sendMessage(net.minecraft.text.Text.literal(message), false);
+        }
     }
     
     /**
@@ -204,5 +319,11 @@ public class BlockScanner {
         scanQueue.clear();
         queuedChunks.clear();
         dataStore.clearSessionData();
+    }
+
+    public void clearAllData() {
+        scanQueue.clear();
+        queuedChunks.clear();
+        dataStore.clear();
     }
 }

@@ -11,6 +11,7 @@ package com.blockscanner.data;
  * @param dimension  The dimension where the block was found 
  *                   (e.g., "minecraft:overworld", "minecraft:the_nether", "minecraft:the_end")
  * @param timestamp  The Unix timestamp when the block was found
+ * @param signText   The text on a sign block, if applicable
  */
 public record ScanResult(
     String blockType,
@@ -18,7 +19,8 @@ public record ScanResult(
     int y,
     int z,
     String dimension,
-    long timestamp
+    long timestamp,
+    String signText
 ) {
     /**
      * Creates a ScanResult with validation.

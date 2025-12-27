@@ -107,6 +107,22 @@ public class DataPersistence {
     }
 
     /**
+     * Deletes the persisted data file for a server if it exists.
+     *
+     * @param serverAddress The server address to delete data for
+     * @return true if a file was deleted, false otherwise
+     * @throws IOException if the file cannot be deleted
+     */
+    public boolean delete(String serverAddress) throws IOException {
+        Path dataFile = getServerDataFile(serverAddress);
+        if (Files.exists(dataFile)) {
+            Files.delete(dataFile);
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * Sanitizes a server address to create a safe filename.
      * Replaces invalid filename characters with underscores.
      * 

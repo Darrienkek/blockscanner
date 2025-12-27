@@ -4,7 +4,6 @@ import com.blockscanner.data.ConfigPersistence;
 import com.blockscanner.data.DataPersistence;
 import com.blockscanner.data.ScanConfig;
 import com.blockscanner.data.ScanDataStore;
-import com.blockscanner.render.WaypointBeamRenderer;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -16,7 +15,7 @@ import java.io.IOException;
 
 /**
  * Main entry point for the Block Scanner mod.
- * This client-side mod scans loaded chunks for barrier and command blocks,
+ * This client-side mod scans loaded chunks for user-configured block types,
  * persists results to JSON, and provides a web-based visualization interface.
  */
 public class BlockScannerMod implements ClientModInitializer {
@@ -29,6 +28,8 @@ public class BlockScannerMod implements ClientModInitializer {
     private static ConfigPersistence configPersistence;
     private static BlockScanner blockScanner;
     private static WebServer webServer;
+    private boolean webServerStarted = false;
+    private boolean announcedStatus = false;
 
     @Override
     public void onInitializeClient() {
@@ -39,17 +40,12 @@ public class BlockScannerMod implements ClientModInitializer {
         configPersistence = new ConfigPersistence();
         blockScanner = new BlockScanner(dataStore);
         scanController = new ScanController(blockScanner);
-        webServer = new WebServer(8080, dataStore, scanController, configPersistence);
-        try {
-            WaypointBeamRenderer.register(scanController);
-        } catch (NoClassDefFoundError e) {
-            LOGGER.warn("World rendering API not available; waypoint beam disabled.");
-        }
+        webServer = new WebServer(8080, dataStore, scanController, configPersistence, dataPersistence);
         
-        try {
-            ScanConfig config = configPersistence.load();
+            try {
+                ScanConfig config = configPersistence.load();
             if (config != null) {
-                String error = scanController.updateConfig(config.searchAreaBlocks());
+                String error = scanController.updateConfig(config.targetBlocks(), config.rescanScannedChunks(), config.scanSigns());
                 if (error != null) {
                     LOGGER.warn("Invalid saved config ignored: {}", error);
                 } else {
@@ -96,8 +92,10 @@ public class BlockScannerMod implements ClientModInitializer {
         try {
             webServer.start();
             LOGGER.info("Web server started on port 8080");
+            webServerStarted = true;
         } catch (IOException e) {
             LOGGER.error("Failed to start web server: {}", e.getMessage());
+            webServerStarted = false;
         }
         
         LOGGER.info("Block Scanner mod initialized successfully!");
@@ -114,6 +112,21 @@ public class BlockScannerMod implements ClientModInitializer {
             while (ScanController.getToggleKey().wasPressed()) {
                 scanController.toggle();
             }
+        }
+
+        if (!announcedStatus && client.player != null) {
+            if (webServerStarted) {
+                client.player.sendMessage(
+                    net.minecraft.text.Text.literal("[Block Scanner] Web server running at http://localhost:8080"),
+                    false
+                );
+            } else {
+                client.player.sendMessage(
+                    net.minecraft.text.Text.literal("[Block Scanner] Web server failed to start (check logs)"),
+                    false
+                );
+            }
+            announcedStatus = true;
         }
         
         scanController.onClientTick(client);

@@ -35,9 +35,10 @@ class ScanResultPropertyTest {
             @ForAll @IntRange(min = -64, max = 320) int y,
             @ForAll @IntRange(min = -30000000, max = 30000000) int z,
             @ForAll("validDimensions") String dimension,
-            @ForAll @LongRange(min = 0) long timestamp
+            @ForAll @LongRange(min = 0) long timestamp,
+            @ForAll("optionalTexts") String signText
     ) {
-        ScanResult result = new ScanResult(blockType, x, y, z, dimension, timestamp);
+        ScanResult result = new ScanResult(blockType, x, y, z, dimension, timestamp, signText);
 
         // Verify all fields are present and valid
         assertNotNull(result.blockType(), "blockType must not be null");
@@ -64,7 +65,7 @@ class ScanResultPropertyTest {
             @ForAll @LongRange(min = 0) long timestamp
     ) {
         assertThrows(IllegalArgumentException.class, () -> 
-            new ScanResult(null, x, y, z, dimension, timestamp)
+            new ScanResult(null, x, y, z, dimension, timestamp, null)
         );
     }
 
@@ -80,7 +81,7 @@ class ScanResultPropertyTest {
             @ForAll @LongRange(min = 0) long timestamp
     ) {
         assertThrows(IllegalArgumentException.class, () -> 
-            new ScanResult(blockType, x, y, z, null, timestamp)
+            new ScanResult(blockType, x, y, z, null, timestamp, null)
         );
     }
 
@@ -97,7 +98,7 @@ class ScanResultPropertyTest {
             @ForAll @LongRange(min = 0) long timestamp
     ) {
         assertThrows(IllegalArgumentException.class, () -> 
-            new ScanResult(blankBlockType, x, y, z, dimension, timestamp)
+            new ScanResult(blankBlockType, x, y, z, dimension, timestamp, null)
         );
     }
 
@@ -114,5 +115,13 @@ class ScanResultPropertyTest {
     @Provide
     Arbitrary<String> blankStrings() {
         return Arbitraries.of("", "   ", "\t", "\n", "  \t\n  ");
+    }
+
+    @Provide
+    Arbitrary<String> optionalTexts() {
+        return Arbitraries.oneOf(
+            Arbitraries.just(null),
+            Arbitraries.strings().withChars('a', 'z').ofMinLength(0).ofMaxLength(100)
+        );
     }
 }
