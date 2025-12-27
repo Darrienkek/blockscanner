@@ -4,7 +4,6 @@ import com.blockscanner.data.ConfigPersistence;
 import com.blockscanner.data.ScanConfig;
 import com.blockscanner.data.ScanDataStore;
 import com.blockscanner.data.ScanResult;
-import com.blockscanner.data.ScannedChunk;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.sun.net.httpserver.HttpExchange;
@@ -19,7 +18,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.Executors;
 
 /**
@@ -113,8 +111,10 @@ public class WebServer {
             return;
         }
         
-        Set<ScannedChunk> chunks = dataStore.getScannedChunks();
-        String json = gson.toJson(chunks);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("scannedChunks", dataStore.getScannedChunks());
+        payload.put("skippedChunks", dataStore.getSkippedChunks());
+        String json = gson.toJson(payload);
         
         addCorsHeaders(exchange);
         sendResponse(exchange, 200, "application/json", json);
@@ -443,6 +443,9 @@ public class WebServer {
                     .chunk-cell.scanned {
                         background-color: #4CAF50;
                     }
+                    .chunk-cell.skipped {
+                        background-color: #ff9800;
+                    }
                     .chunk-cell.player {
                         background-color: #2196F3;
                         border: 2px solid #ffffff;
@@ -617,6 +620,7 @@ public class WebServer {
                     let currentDimension = 'minecraft:overworld';
                     let blocksData = [];
                     let chunksData = [];
+                    let skippedChunksData = [];
                     let playerData = {};
                     let configData = {};
                     let statusData = {};
@@ -632,7 +636,9 @@ public class WebServer {
                             
                             statusData = await statusRes.json();
                             blocksData = await blocksRes.json();
-                            chunksData = await chunksRes.json();
+                            const chunkPayload = await chunksRes.json();
+                            chunksData = chunkPayload.scannedChunks || [];
+                            skippedChunksData = chunkPayload.skippedChunks || [];
                             playerData = await playerRes.json();
                             
                             if (playerData.dimension && playerData.dimension !== currentDimension) {
@@ -824,10 +830,11 @@ public class WebServer {
                         const chunkMap = document.getElementById('chunk-map');
                         
                         const dimensionChunks = chunksData.filter(chunk => chunk.dimension === currentDimension);
+                        const dimensionSkipped = skippedChunksData.filter(chunk => chunk.dimension === currentDimension);
                         const hasPlayer = playerData.dimension === currentDimension;
                         const hasTarget = statusData.targetChunkX !== undefined && statusData.targetChunkZ !== undefined;
                         
-                        if (dimensionChunks.length === 0 && !hasPlayer && !hasTarget) {
+                        if (dimensionChunks.length === 0 && dimensionSkipped.length === 0 && !hasPlayer && !hasTarget) {
                             chunkMap.innerHTML = '<div style="text-align: center; color: #888; grid-column: 1 / -1;">No chunks scanned in this dimension</div>';
                             return;
                         }
@@ -891,6 +898,7 @@ public class WebServer {
                         for (let z = minZ; z <= maxZ; z++) {
                             for (let x = minX; x <= maxX; x++) {
                                 const isScanned = dimensionChunks.some(c => c.chunkX === x && c.chunkZ === z);
+                                const isSkipped = dimensionSkipped.some(c => c.chunkX === x && c.chunkZ === z);
                                 const isPlayer = playerData.dimension === currentDimension && 
                                                playerData.chunkX === x && playerData.chunkZ === z;
                                 const isTarget = statusData.targetChunkX === x && statusData.targetChunkZ === z;
@@ -899,6 +907,7 @@ public class WebServer {
                                 if (isTarget) className += ' target';
                                 else if (isPlayer) className += ' player';
                                 else if (isScanned) className += ' scanned';
+                                else if (isSkipped) className += ' skipped';
                                 
                                 html += `<div class="${className}" title="Chunk ${x}, ${z}"></div>`;
                             }

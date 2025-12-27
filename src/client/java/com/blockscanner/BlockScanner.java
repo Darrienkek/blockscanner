@@ -7,7 +7,8 @@ import net.minecraft.block.Blocks;
 import net.minecraft.world.World;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
-import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.world.chunk.ChunkStatus;
+import net.minecraft.world.chunk.Chunk;
 
 import java.util.Queue;
 import java.util.Set;
@@ -137,9 +138,10 @@ public class BlockScanner {
             return;
         }
         
-        WorldChunk chunk = world.getChunk(pos.x, pos.z);
+        Chunk chunk = world.getChunkManager().getChunk(pos.x, pos.z, ChunkStatus.FULL, false);
         if (chunk == null) {
-            BlockScannerMod.LOGGER.warn("Could not get chunk {}", pos);
+            BlockScannerMod.LOGGER.info("Skipping chunk {} (not loaded yet)", pos);
+            dataStore.markChunkSkipped(pos.x, pos.z, dimension);
             return;
         }
         

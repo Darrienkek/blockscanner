@@ -4,6 +4,7 @@ import com.blockscanner.data.ConfigPersistence;
 import com.blockscanner.data.DataPersistence;
 import com.blockscanner.data.ScanConfig;
 import com.blockscanner.data.ScanDataStore;
+import com.blockscanner.render.WaypointBeamRenderer;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -39,6 +40,11 @@ public class BlockScannerMod implements ClientModInitializer {
         blockScanner = new BlockScanner(dataStore);
         scanController = new ScanController(blockScanner);
         webServer = new WebServer(8080, dataStore, scanController, configPersistence);
+        try {
+            WaypointBeamRenderer.register(scanController);
+        } catch (NoClassDefFoundError e) {
+            LOGGER.warn("World rendering API not available; waypoint beam disabled.");
+        }
         
         try {
             ScanConfig config = configPersistence.load();

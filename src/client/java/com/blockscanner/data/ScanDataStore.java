@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ScanDataStore {
     private final Map<String, ScanResult> foundBlocks = new ConcurrentHashMap<>();
     private final Set<ScannedChunk> scannedChunks = ConcurrentHashMap.newKeySet();
+    private final Set<ScannedChunk> skippedChunks = ConcurrentHashMap.newKeySet();
     private String currentServer;
     private String currentDimension;
 
@@ -42,6 +43,25 @@ public class ScanDataStore {
 
         ScannedChunk scannedChunk = new ScannedChunk(chunkX, chunkZ, dimension);
         scannedChunks.add(scannedChunk);
+        skippedChunks.remove(scannedChunk);
+    }
+
+    /**
+     * Marks a chunk as skipped because it was not loaded when scanning was attempted.
+     *
+     * @param chunkX The chunk X coordinate
+     * @param chunkZ The chunk Z coordinate
+     * @param dimension The dimension where the chunk was skipped
+     */
+    public void markChunkSkipped(int chunkX, int chunkZ, String dimension) {
+        if (dimension == null || dimension.isBlank()) {
+            return;
+        }
+
+        ScannedChunk skippedChunk = new ScannedChunk(chunkX, chunkZ, dimension);
+        if (!scannedChunks.contains(skippedChunk)) {
+            skippedChunks.add(skippedChunk);
+        }
     }
 
     /**
@@ -62,6 +82,23 @@ public class ScanDataStore {
     }
 
     /**
+     * Checks if a chunk was skipped because it was not loaded.
+     *
+     * @param chunkX The chunk X coordinate
+     * @param chunkZ The chunk Z coordinate
+     * @param dimension The dimension to check
+     * @return true if the chunk was skipped, false otherwise
+     */
+    public boolean isChunkSkipped(int chunkX, int chunkZ, String dimension) {
+        if (dimension == null || dimension.isBlank()) {
+            return false;
+        }
+
+        ScannedChunk targetChunk = new ScannedChunk(chunkX, chunkZ, dimension);
+        return skippedChunks.contains(targetChunk);
+    }
+
+    /**
      * Gets all found blocks as a list.
      * 
      * @return A list of all found blocks
@@ -77,6 +114,15 @@ public class ScanDataStore {
      */
     public Set<ScannedChunk> getScannedChunks() {
         return new HashSet<>(scannedChunks);
+    }
+
+    /**
+     * Gets all skipped chunks as a set.
+     *
+     * @return A set of all skipped chunks
+     */
+    public Set<ScannedChunk> getSkippedChunks() {
+        return new HashSet<>(skippedChunks);
     }
 
     /**
@@ -135,6 +181,7 @@ public class ScanDataStore {
      */
     public void clearSessionData() {
         scannedChunks.clear();
+        skippedChunks.clear();
     }
 
     /**
@@ -143,6 +190,7 @@ public class ScanDataStore {
     public void clear() {
         foundBlocks.clear();
         scannedChunks.clear();
+        skippedChunks.clear();
     }
 
     /**

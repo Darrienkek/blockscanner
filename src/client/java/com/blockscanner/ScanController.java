@@ -4,7 +4,6 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.text.Text;
 import com.blockscanner.data.ScanConfig;
-import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 
 /**
@@ -18,7 +17,7 @@ public class ScanController {
     
     private static final int MAX_CHUNKS_PER_TICK = 2;
     private static final int QUEUE_INTERVAL_TICKS = 10;
-    private static final int NEARBY_QUEUE_RADIUS = 4;
+    private static final int NEARBY_QUEUE_RADIUS = 5;
     private static final int DEFAULT_SEARCH_AREA_BLOCKS = 10000;
     private static final int MIN_SEARCH_AREA_BLOCKS = 16;
     private static final int MAX_SEARCH_AREA_BLOCKS = 200000;
