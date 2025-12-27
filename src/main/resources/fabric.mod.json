@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "blockscanner",
+  "version": "${version}",
+  "name": "Block Scanner",
+  "description": "A client-side mod that scans chunks for barrier and command blocks with web visualization",
+  "authors": [
+    "BlockScanner Team"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/blockscanner/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.blockscanner.BlockScannerMod"
+    ]
+  },
+  "mixins": [],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

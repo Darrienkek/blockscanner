@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+out/
+build/libs/*.jar
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+
+# Fabric
+run/
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
+.env
+.jqwik-database
+.kiro/
