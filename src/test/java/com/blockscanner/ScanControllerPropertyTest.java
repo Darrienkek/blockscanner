@@ -1,11 +1,14 @@
 package com.blockscanner;
 
+import com.blockscanner.data.ScannedChunk;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
 import net.jqwik.api.Report;
 import net.jqwik.api.Reporting;
 import net.jqwik.api.constraints.IntRange;
 import net.jqwik.api.constraints.LongRange;
+
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -72,5 +75,30 @@ public class ScanControllerPropertyTest {
     ) {
         boolean expected = now - lastWarningAt >= interval;
         assertEquals(expected, ScanController.shouldWarnSpectator(now, lastWarningAt, interval));
+    }
+
+    @Property
+    void chunkSpanForDimensionReturnsBoundingBoxDimensions() {
+        Set<ScannedChunk> scanned = Set.of(
+            new ScannedChunk(-362, -357, "minecraft:overworld"),
+            new ScannedChunk(362, 362, "minecraft:overworld"),
+            new ScannedChunk(0, 10, "minecraft:the_nether")
+        );
+
+        ScanController.ChunkSpan span = ScanController.chunkSpanForDimension(scanned, "minecraft:overworld");
+        assertEquals(725, span.spanXChunks());
+        assertEquals(720, span.spanZChunks());
+    }
+
+    @Property
+    void chunkSpanForDimensionReturnsZeroWhenNoMatchingDimension() {
+        Set<ScannedChunk> scanned = Set.of(
+            new ScannedChunk(1, 1, "minecraft:the_nether"),
+            new ScannedChunk(2, 3, "minecraft:the_nether")
+        );
+
+        ScanController.ChunkSpan span = ScanController.chunkSpanForDimension(scanned, "minecraft:overworld");
+        assertEquals(0, span.spanXChunks());
+        assertEquals(0, span.spanZChunks());
     }
 }

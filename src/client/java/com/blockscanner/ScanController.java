@@ -1,6 +1,7 @@
 package com.blockscanner;
 
 import com.blockscanner.data.ScanConfig;
+import com.blockscanner.data.ScannedChunk;
 import com.blockscanner.data.SpiralCursorState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
@@ -137,11 +138,11 @@ public class ScanController {
 
         blockScanner.processAnnouncementQueue();
         entityScanner.processAnnouncementQueue();
-        maybeAnnounceProgress(client);
 
         String currentDimension = client.world.getRegistryKey().getValue().toString();
         blockScanner.getDataStore().setCurrentDimension(currentDimension);
         entityScanner.getDataStore().setCurrentDimension(currentDimension);
+        maybeAnnounceProgress(client, currentDimension);
 
         if (!currentDimension.equals(lastTraversalDimension)) {
             blockScanner.clearQueueOnly();
@@ -433,6 +434,9 @@ public class ScanController {
     ) {
     }
 
+    static record ChunkSpan(int spanXChunks, int spanZChunks) {
+    }
+
     private void updateTraversalStatus(
         String dimension,
         SpiralCursorState cursor,
@@ -525,7 +529,7 @@ public class ScanController {
         return now - lastWarningAt >= intervalMs;
     }
 
-    private void maybeAnnounceProgress(MinecraftClient client) {
+    private void maybeAnnounceProgress(MinecraftClient client, String currentDimension) {
         long now = System.currentTimeMillis();
         if (!shouldWarnSpectator(now, lastProgressAnnouncementAt, PROGRESS_ANNOUNCEMENT_INTERVAL_MS)) {
             return;
@@ -534,13 +538,64 @@ public class ScanController {
             return;
         }
 
-        int totalChunks = blockScanner.getDataStore().getScannedChunks().size();
+        Set<ScannedChunk> scannedChunks = blockScanner.getDataStore().getScannedChunks();
+        int totalChunks = scannedChunks.size();
+        ChunkSpan chunkSpan = chunkSpanForDimension(scannedChunks, currentDimension);
         int currentX = client.player.getBlockX();
         int currentZ = client.player.getBlockZ();
-        String message = "I've scanned total " + totalChunks + " chunks, I'm currently at " + currentX + "," + currentZ + ".";
+        String message = "I've scanned a total of " + totalChunks + " chunks ("
+            + chunkSpan.spanXChunks() + " x " + chunkSpan.spanZChunks()
+            + " chunks), I'm currently at " + currentX + "," + currentZ + ".";
         if (sendServerChatMessage(message)) {
             lastProgressAnnouncementAt = now;
         }
+    }
+
+    static ChunkSpan chunkSpanForDimension(Set<ScannedChunk> scannedChunks, String dimension) {
+        if (scannedChunks == null || scannedChunks.isEmpty() || dimension == null || dimension.isBlank()) {
+            return new ChunkSpan(0, 0);
+        }
+
+        boolean found = false;
+        int minX = 0;
+        int maxX = 0;
+        int minZ = 0;
+        int maxZ = 0;
+
+        for (ScannedChunk chunk : scannedChunks) {
+            if (chunk == null || !dimension.equals(chunk.dimension())) {
+                continue;
+            }
+
+            int chunkX = chunk.chunkX();
+            int chunkZ = chunk.chunkZ();
+            if (!found) {
+                minX = chunkX;
+                maxX = chunkX;
+                minZ = chunkZ;
+                maxZ = chunkZ;
+                found = true;
+                continue;
+            }
+
+            if (chunkX < minX) {
+                minX = chunkX;
+            } else if (chunkX > maxX) {
+                maxX = chunkX;
+            }
+
+            if (chunkZ < minZ) {
+                minZ = chunkZ;
+            } else if (chunkZ > maxZ) {
+                maxZ = chunkZ;
+            }
+        }
+
+        if (!found) {
+            return new ChunkSpan(0, 0);
+        }
+
+        return new ChunkSpan((maxX - minX) + 1, (maxZ - minZ) + 1);
     }
 
     private boolean sendServerChatMessage(String message) {
