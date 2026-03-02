@@ -19,6 +19,7 @@ import java.util.Set;
 public class ScanController {
     private volatile boolean scanningActive = false;
     private final BlockScanner blockScanner;
+    private final EntityScanner entityScanner;
     private static KeyBinding toggleKey;
 
     private static final int MAX_CHUNKS_PER_TICK = 2;
@@ -31,9 +32,18 @@ public class ScanController {
         "minecraft:chain_command_block",
         "minecraft:repeating_command_block"
     );
+
+    private static final List<String> DEFAULT_TARGET_ENTITIES = List.of(
+            "minecraft:block_display",
+            "minecraft:item_display",
+            "minecraft:text_display",
+            "minecraft:item_frame",
+            "minecraft:glow_item_frame"
+    );
     private static final List<String> DEFAULT_ANNOUNCE_BLOCKS = List.of();
 
     private List<String> targetBlocks = new ArrayList<>(DEFAULT_TARGET_BLOCKS);
+    private List<String> targetEntites = new ArrayList<>(DEFAULT_TARGET_ENTITIES);
     private List<String> announceBlocks = new ArrayList<>(DEFAULT_ANNOUNCE_BLOCKS);
     private boolean rescanScannedChunks = false;
     private boolean scanSigns = false;
@@ -52,12 +62,17 @@ public class ScanController {
     private volatile long traversalWaypointsCompleted;
     private volatile int traversalBatchChunksScanned;
 
-    public ScanController(BlockScanner blockScanner) {
+    public ScanController(BlockScanner blockScanner, EntityScanner entityScanner) {
         this.blockScanner = blockScanner;
         this.blockScanner.setTargetBlocks(targetBlocks);
         this.blockScanner.setAnnounceBlocks(announceBlocks);
         this.blockScanner.setRescanScannedChunks(rescanScannedChunks);
         this.blockScanner.setScanSigns(scanSigns);
+
+        this.entityScanner = entityScanner;
+        this.entityScanner.setTargetEntities(targetEntites);
+        this.entityScanner.setAnnounceEntities(targetEntites);
+        this.entityScanner.setRescanScannedChunks(rescanScannedChunks);
     }
 
     /**
@@ -70,6 +85,7 @@ public class ScanController {
         MinecraftClient client = MinecraftClient.getInstance();
         if (!scanningActive) {
             blockScanner.clearQueueOnly();
+            entityScanner.clearQueueOnly();
             waitingForSpectator = false;
             releaseMovementKeys(client);
             lastProgressAnnouncementAt = 0L;
@@ -110,13 +126,16 @@ public class ScanController {
         }
 
         blockScanner.processAnnouncementQueue();
+        entityScanner.processAnnouncementQueue();
         maybeAnnounceProgress(client);
 
         String currentDimension = client.world.getRegistryKey().getValue().toString();
         blockScanner.getDataStore().setCurrentDimension(currentDimension);
+        entityScanner.getDataStore().setCurrentDimension(currentDimension);
 
         if (!currentDimension.equals(lastTraversalDimension)) {
             blockScanner.clearQueueOnly();
+            entityScanner.clearQueueOnly();
             lastTraversalDimension = currentDimension;
         }
 
@@ -142,13 +161,22 @@ public class ScanController {
             SpiralTraversal.BATCH_RADIUS
         );
 
+        entityScanner.queueChunksInWindow(
+                client.world,
+                centerChunk.chunkX(),
+                centerChunk.chunkZ(),
+                SpiralTraversal.BATCH_RADIUS
+        );
         blockScanner.processScanQueue(client.world, MAX_CHUNKS_PER_TICK);
+        entityScanner.processScanQueue(client.world, MAX_CHUNKS_PER_TICK);
 
         int batchChunksScanned = countBatchScanned(currentDimension, centerChunk.chunkX(), centerChunk.chunkZ());
         if (isBatchComplete(batchChunksScanned)) {
             SpiralCursorState nextCursor = SpiralTraversal.advance(cursor);
             blockScanner.getDataStore().updateTraversalState(currentDimension, nextCursor);
+            entityScanner.getDataStore().updateTraversalState(currentDimension, nextCursor);
             blockScanner.clearQueueOnly();
+            entityScanner.clearQueueOnly();
             SpiralTraversal.ChunkCoordinate nextCenter = SpiralTraversal.currentCenterChunk(nextCursor);
             updateTraversalStatus(currentDimension, nextCursor, nextCenter, 0);
             return;
@@ -237,6 +265,7 @@ public class ScanController {
 
     public void clearAllData() {
         blockScanner.clearAllData();
+        entityScanner.clearAllData();
     }
 
     public TraversalStatus getTraversalStatusSnapshot() {

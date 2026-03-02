@@ -51,7 +51,7 @@ public class DataPersistence {
 
         Path dataFile = getServerDataFile(serverAddress);
         Path tempFile = dataFile.resolveSibling(dataFile.getFileName() + ".tmp");
-        
+
         Files.writeString(tempFile, json, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         try {
             Files.move(tempFile, dataFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);

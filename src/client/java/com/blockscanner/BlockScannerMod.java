@@ -27,6 +27,7 @@ public class BlockScannerMod implements ClientModInitializer {
     private static DataPersistence dataPersistence;
     private static ConfigPersistence configPersistence;
     private static BlockScanner blockScanner;
+    private static EntityScanner entityScanner;
     private static WebServer webServer;
     private boolean webServerStarted = false;
     private boolean announcedStatus = false;
@@ -39,7 +40,8 @@ public class BlockScannerMod implements ClientModInitializer {
         dataPersistence = new DataPersistence();
         configPersistence = new ConfigPersistence();
         blockScanner = new BlockScanner(dataStore);
-        scanController = new ScanController(blockScanner);
+        entityScanner = new EntityScanner(dataStore);
+        scanController = new ScanController(blockScanner, entityScanner);
         webServer = new WebServer(8080, dataStore, scanController, configPersistence, dataPersistence);
 
         try {
@@ -70,6 +72,7 @@ public class BlockScannerMod implements ClientModInitializer {
             LOGGER.info("Joined server: {}", serverAddress);
 
             blockScanner.clearQueueOnly();
+            entityScanner.clearQueueOnly();
             dataStore.clear();
             dataStore.setCurrentServer(serverAddress);
 
@@ -95,6 +98,7 @@ public class BlockScannerMod implements ClientModInitializer {
             }
 
             blockScanner.clearQueueOnly();
+            entityScanner.clearQueueOnly();
             dataStore.clearSessionData();
         });
 
