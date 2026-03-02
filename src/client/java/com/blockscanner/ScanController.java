@@ -81,7 +81,7 @@ public class ScanController {
 
         this.entityScanner = entityScanner;
         this.entityScanner.setTargetEntities(targetEntites);
-        this.entityScanner.setAnnounceEntities(targetEntites);
+        this.entityScanner.setAnnounceEntities(announceBlocks);
         this.entityScanner.setRescanScannedChunks(rescanScannedChunks);
     }
 
@@ -318,6 +318,10 @@ public class ScanController {
             String error = blockScanner.setAnnounceBlocks(normalizedAnnounce);
             if (error != null) {
                 return error;
+            }
+            String entityError = entityScanner.setAnnounceEntities(normalizedAnnounce);
+            if (entityError != null) {
+                return entityError;
             }
             this.announceBlocks = new ArrayList<>(normalizedAnnounce);
         }
