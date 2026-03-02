@@ -258,6 +258,7 @@ public class ScanDataStore {
      */
     public void clear() {
         foundBlocks.clear();
+        foundEntities.clear();
         scannedChunks.clear();
         skippedChunks.clear();
         traversalByDimension.clear();

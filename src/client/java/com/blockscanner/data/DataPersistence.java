@@ -10,7 +10,6 @@ import java.nio.file.Path;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * Handles saving and loading scan data to/from JSON files.
@@ -45,29 +44,20 @@ public class DataPersistence {
             throw new IllegalArgumentException("Server address must be set before saving");
         }
 
-        CompletableFuture.runAsync(() -> {
-            try
-            {
-                Files.createDirectories(CONFIG_DIR);
+        Files.createDirectories(CONFIG_DIR);
 
-                ScanDataSnapshot snapshot = dataStore.getSnapshot();
-                String json = gson.toJson(snapshot);
+        ScanDataSnapshot snapshot = dataStore.getSnapshot();
+        String json = gson.toJson(snapshot);
 
-                Path dataFile = getServerDataFile(serverAddress);
-                Path tempFile = dataFile.resolveSibling(dataFile.getFileName() + ".tmp");
+        Path dataFile = getServerDataFile(serverAddress);
+        Path tempFile = dataFile.resolveSibling(dataFile.getFileName() + ".tmp");
 
-                Files.writeString(tempFile, json, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                try
-                {
-                    Files.move(tempFile, dataFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-                } catch (AtomicMoveNotSupportedException e)
-                {
-                    Files.move(tempFile, dataFile, StandardCopyOption.REPLACE_EXISTING);
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        });
+        Files.writeString(tempFile, json, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        try {
+            Files.move(tempFile, dataFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(tempFile, dataFile, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     /**
