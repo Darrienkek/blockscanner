@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class ScanDataStore {
     private final Map<String, ScanResult> foundBlocks = new ConcurrentHashMap<>();
+    private final Map<String, ScanResult> foundEntities =  new ConcurrentHashMap<>();
     private final Set<ScannedChunk> scannedChunks = ConcurrentHashMap.newKeySet();
     private final Set<ScannedChunk> skippedChunks = ConcurrentHashMap.newKeySet();
     private final Map<String, SpiralCursorState> traversalByDimension = new ConcurrentHashMap<>();
@@ -33,6 +34,15 @@ public class ScanDataStore {
 
         String positionKey = result.x() + "," + result.y() + "," + result.z() + "," + result.dimension();
         foundBlocks.put(positionKey, result);
+    }
+
+    public void addFoundEntity(ScanResult result) {
+        if (result == null) {
+            return;
+        }
+
+        String positionKey = result.x() + "," + result.y() + "," + result.z() + "," + result.dimension();
+        foundEntities.put(positionKey, result);
     }
 
     /**
@@ -111,6 +121,10 @@ public class ScanDataStore {
      */
     public List<ScanResult> getFoundBlocks() {
         return new ArrayList<>(foundBlocks.values());
+    }
+
+    public List<ScanResult> getFoundEntities() {
+        return new ArrayList<>(foundEntities.values());
     }
 
     /**
