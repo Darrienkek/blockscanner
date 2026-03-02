@@ -34,9 +34,9 @@ public class ScanController {
     );
 
     private static final List<String> DEFAULT_TARGET_ENTITIES = List.of(
-            "minecraft:entity.minecraft.block_display",
-            "minecraft:entity.minecraft.item_display",
-            "minecraft:entity.minecraft.text_display",
+            "minecraft:block_display",
+            "minecraft:item_display",
+            "minecraft:text_display",
             "minecraft:item_frame",
             "minecraft:glow_item_frame"
     );
