@@ -253,6 +253,7 @@ public class ScanController {
         if (rescanScannedChunks != null) {
             this.rescanScannedChunks = rescanScannedChunks;
             blockScanner.setRescanScannedChunks(rescanScannedChunks);
+            entityScanner.setRescanScannedChunks(rescanScannedChunks);
         }
 
         if (scanSigns != null) {

@@ -76,8 +76,6 @@ public class WebServer {
         
         server.setExecutor(Executors.newFixedThreadPool(4));
         server.start();
-        
-        BlockScannerMod.LOGGER.info("WebServer started on port {}", port);
     }
     
     /**
@@ -86,7 +84,6 @@ public class WebServer {
     public void stop() {
         if (server != null) {
             server.stop(0);
-            BlockScannerMod.LOGGER.info("WebServer stopped");
         }
     }
     

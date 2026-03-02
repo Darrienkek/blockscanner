@@ -34,8 +34,6 @@ public class BlockScannerMod implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        LOGGER.info("Block Scanner mod initializing...");
-
         dataStore = new ScanDataStore();
         dataPersistence = new DataPersistence();
         configPersistence = new ConfigPersistence();
@@ -55,8 +53,6 @@ public class BlockScannerMod implements ClientModInitializer {
                 );
                 if (error != null) {
                     LOGGER.warn("Invalid saved config ignored: {}", error);
-                } else {
-                    LOGGER.info("Loaded scan config from {}", configPersistence.getConfigFile());
                 }
             }
         } catch (IOException e) {
@@ -69,7 +65,6 @@ public class BlockScannerMod implements ClientModInitializer {
 
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             String serverAddress = getServerAddress(client);
-            LOGGER.info("Joined server: {}", serverAddress);
 
             blockScanner.clearQueueOnly();
             entityScanner.clearQueueOnly();
@@ -78,7 +73,6 @@ public class BlockScannerMod implements ClientModInitializer {
 
             try {
                 dataPersistence.load(dataStore, serverAddress);
-                LOGGER.info("Loaded scan data for server: {}", serverAddress);
             } catch (IOException e) {
                 LOGGER.warn("Failed to load scan data for server {}: {}", serverAddress, e.getMessage());
             }
@@ -87,11 +81,8 @@ public class BlockScannerMod implements ClientModInitializer {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             String serverAddress = dataStore.getCurrentServer();
             if (serverAddress != null) {
-                LOGGER.info("Disconnected from server: {}", serverAddress);
-
                 try {
                     dataPersistence.save(dataStore);
-                    LOGGER.info("Saved scan data for server: {}", serverAddress);
                 } catch (IOException e) {
                     LOGGER.error("Failed to save scan data for server {}: {}", serverAddress, e.getMessage());
                 }
@@ -104,14 +95,11 @@ public class BlockScannerMod implements ClientModInitializer {
 
         try {
             webServer.start();
-            LOGGER.info("Web server started on port 8080");
             webServerStarted = true;
         } catch (IOException e) {
             LOGGER.error("Failed to start web server: {}", e.getMessage());
             webServerStarted = false;
         }
-
-        LOGGER.info("Block Scanner mod initialized successfully!");
     }
 
     /**

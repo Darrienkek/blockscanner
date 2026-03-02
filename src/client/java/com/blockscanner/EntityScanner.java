@@ -2,12 +2,6 @@ package com.blockscanner;
 
 import com.blockscanner.data.ScanDataStore;
 import com.blockscanner.data.ScanResult;
-import net.minecraft.block.AbstractSignBlock;
-import net.minecraft.block.Block;
-import net.minecraft.block.entity.BlockEntity;
-import net.minecraft.block.entity.SignBlockEntity;
-import net.minecraft.block.entity.SignText;
-import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
@@ -39,6 +33,7 @@ public class EntityScanner
     private final Set<String> targetEntityIds = ConcurrentHashMap.newKeySet();
     private final Set<String> announceEntityIds = ConcurrentHashMap.newKeySet();
     private final Set<String> announcedEntityPositions = ConcurrentHashMap.newKeySet();
+    private final Set<String> scannedEntityChunks = ConcurrentHashMap.newKeySet();
     private volatile boolean rescanScannedChunks = false;
     private volatile long lastAnnouncementAt = 0L;
     private static final int MAX_QUEUE_SIZE = 200;
@@ -112,6 +107,9 @@ public class EntityScanner
                 if (scanQueue.size() >= MAX_QUEUE_SIZE) {
                     return;
                 }
+                if (!rescanScannedChunks && scannedEntityChunks.contains(chunkKey(dimension, x, z))) {
+                    continue;
+                }
                 String key = chunkKey(dimension, x, z);
                 if (queuedChunks.add(key)) {
                     scanQueue.offer(new ChunkPos(x, z));
@@ -144,6 +142,10 @@ public class EntityScanner
         }
 
         String dimension = world.getRegistryKey().getValue().toString();
+        String key = chunkKey(dimension, pos.x, pos.z);
+        if (!rescanScannedChunks && scannedEntityChunks.contains(key)) {
+            return;
+        }
 
         Chunk chunk = world.getChunkManager().getChunk(pos.x, pos.z, ChunkStatus.FULL, false);
         if (chunk == null) {
@@ -151,13 +153,8 @@ public class EntityScanner
             return;
         }
 
-        int entitiesFound = 0;
-
-        BlockScannerMod.LOGGER.info("Scanning {} for entities", pos.toString());
-
         Box chunkBox = new Box(pos.getStartX(), world.getBottomY(), pos.getStartZ(), pos.getEndX() + 1, 512, pos.getEndZ() + 1);
         List<Entity> entities = world.getOtherEntities(null, chunkBox, entity -> true);
-        BlockScannerMod.LOGGER.info("Found {} entities in chunk {}", entities.size(), pos);
 
         if (!entities.isEmpty())
         {
@@ -166,19 +163,16 @@ public class EntityScanner
                 if (isTargetEntity(entity))
                 {
                     String entityType = geyEntityTypeName(entity);
-                    BlockScannerMod.LOGGER.info("Found valid entity {}", geyEntityTypeName(entity));
                     ScanResult result = new ScanResult(entityType, entity.getBlockPos().getX(), entity.getBlockPos().getY(), entity.getBlockPos().getZ(), dimension, System.currentTimeMillis(), "");
                     dataStore.addFoundEntity(result);
-                    entitiesFound++;
-                    BlockScannerMod.LOGGER.info("Found {} at {}, {}, {} in {}", entityType, entity.getX(), entity.getY(), entity.getZ(), dimension);
                     sendFoundEntityMessage(entityType, entity.getBlockPos());
                     queueEntityAnnouncement(entityType, entity.getBlockPos(), dimension);
                 }
             }
         }
 
+        scannedEntityChunks.add(key);
         dataStore.markChunkScanned(pos.x, pos.z, dimension);
-        BlockScannerMod.LOGGER.info("Finished scanning chunk {}, found {} target entities. Total chunks scanned: {}", pos, entitiesFound, dataStore.getScannedChunks().size());
     }
 
     private String geyEntityTypeName(Entity entity) {
@@ -225,6 +219,7 @@ public class EntityScanner
         clearQueueOnly();
         announcementQueue.clear();
         announcedEntityPositions.clear();
+        scannedEntityChunks.clear();
         dataStore.clearSessionData();
     }
 
@@ -232,6 +227,7 @@ public class EntityScanner
         clearQueueOnly();
         announcementQueue.clear();
         announcedEntityPositions.clear();
+        scannedEntityChunks.clear();
         dataStore.clear();
     }
 
