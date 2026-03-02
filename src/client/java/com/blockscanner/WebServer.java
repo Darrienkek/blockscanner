@@ -1423,10 +1423,17 @@ public class WebServer {
                         let minZ;
                         let maxZ;
                         if (allChunks.length > 0) {
-                            minX = Math.min(...allChunks.map(c => c.chunkX));
-                            maxX = Math.max(...allChunks.map(c => c.chunkX));
-                            minZ = Math.min(...allChunks.map(c => c.chunkZ));
-                            maxZ = Math.max(...allChunks.map(c => c.chunkZ));
+                            minX = allChunks[0].chunkX;
+                            maxX = allChunks[0].chunkX;
+                            minZ = allChunks[0].chunkZ;
+                            maxZ = allChunks[0].chunkZ;
+                            for (let i = 1; i < allChunks.length; i++) {
+                                const chunk = allChunks[i];
+                                if (chunk.chunkX < minX) minX = chunk.chunkX;
+                                if (chunk.chunkX > maxX) maxX = chunk.chunkX;
+                                if (chunk.chunkZ < minZ) minZ = chunk.chunkZ;
+                                if (chunk.chunkZ > maxZ) maxZ = chunk.chunkZ;
+                            }
                         } else if (hasPlayer) {
                             minX = playerData.chunkX;
                             maxX = playerData.chunkX;
@@ -2272,10 +2279,17 @@ public class WebServer {
                 let minZ;
                 let maxZ;
                 if (allChunks.length > 0) {
-                  minX = Math.min(...allChunks.map(c => c.chunkX));
-                  maxX = Math.max(...allChunks.map(c => c.chunkX));
-                  minZ = Math.min(...allChunks.map(c => c.chunkZ));
-                  maxZ = Math.max(...allChunks.map(c => c.chunkZ));
+                  minX = allChunks[0].chunkX;
+                  maxX = allChunks[0].chunkX;
+                  minZ = allChunks[0].chunkZ;
+                  maxZ = allChunks[0].chunkZ;
+                  for (let i = 1; i < allChunks.length; i++) {
+                    const chunk = allChunks[i];
+                    if (chunk.chunkX < minX) minX = chunk.chunkX;
+                    if (chunk.chunkX > maxX) maxX = chunk.chunkX;
+                    if (chunk.chunkZ < minZ) minZ = chunk.chunkZ;
+                    if (chunk.chunkZ > maxZ) maxZ = chunk.chunkZ;
+                  }
                 } else if (hasPlayer) {
                   minX = playerData.chunkX;
                   maxX = playerData.chunkX;

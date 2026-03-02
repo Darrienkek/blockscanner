@@ -18,6 +18,7 @@ import java.nio.file.StandardOpenOption;
 public class DataPersistence {
     private static final Path CONFIG_DIR = FabricLoader.getInstance()
         .getConfigDir().resolve("blockscanner");
+    private static final long BACKUP_INTERVAL_MS = 10 * 60 * 1000L;
     
     private final Gson gson;
 
@@ -58,6 +59,8 @@ public class DataPersistence {
         } catch (AtomicMoveNotSupportedException e) {
             Files.move(tempFile, dataFile, StandardCopyOption.REPLACE_EXISTING);
         }
+
+        refreshBackupIfDue(serverAddress, dataFile);
     }
 
     /**
@@ -107,6 +110,21 @@ public class DataPersistence {
     }
 
     /**
+     * Gets the file path for a server's rolling backup data file.
+     *
+     * @param serverAddress The server address
+     * @return The path to the server's backup data file
+     */
+    public Path getServerBackupFile(String serverAddress) {
+        if (serverAddress == null || serverAddress.isBlank()) {
+            throw new IllegalArgumentException("serverAddress cannot be null or empty");
+        }
+
+        String sanitizedAddress = sanitizeServerAddress(serverAddress);
+        return CONFIG_DIR.resolve(sanitizedAddress + ".backup.json");
+    }
+
+    /**
      * Deletes the persisted data file for a server if it exists.
      *
      * @param serverAddress The server address to delete data for
@@ -115,11 +133,17 @@ public class DataPersistence {
      */
     public boolean delete(String serverAddress) throws IOException {
         Path dataFile = getServerDataFile(serverAddress);
+        Path backupFile = getServerBackupFile(serverAddress);
+        boolean deleted = false;
         if (Files.exists(dataFile)) {
             Files.delete(dataFile);
-            return true;
+            deleted = true;
         }
-        return false;
+        if (Files.exists(backupFile)) {
+            Files.delete(backupFile);
+            deleted = true;
+        }
+        return deleted;
     }
 
     /**
@@ -139,5 +163,28 @@ public class DataPersistence {
             .replaceAll("^_+|_+$", "")
             .toLowerCase();
         return sanitized.isBlank() ? "unknown" : sanitized;
+    }
+
+    private void refreshBackupIfDue(String serverAddress, Path dataFile) throws IOException {
+        if (!Files.exists(dataFile)) {
+            return;
+        }
+
+        Path backupFile = getServerBackupFile(serverAddress);
+        long now = System.currentTimeMillis();
+        if (Files.exists(backupFile)) {
+            long lastBackupAt = Files.getLastModifiedTime(backupFile).toMillis();
+            if (now - lastBackupAt < BACKUP_INTERVAL_MS) {
+                return;
+            }
+        }
+
+        Path tempBackup = backupFile.resolveSibling(backupFile.getFileName() + ".tmp");
+        Files.copy(dataFile, tempBackup, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
+        try {
+            Files.move(tempBackup, backupFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(tempBackup, backupFile, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 }
