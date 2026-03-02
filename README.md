@@ -2,8 +2,8 @@
 
 THIS PROJECT IS VIBE CODED INTO NEXT WEEK.
 
-Client-side Fabric mod for Minecraft 1.21.11. It scans nearby chunks for
-barrier and command blocks, then exposes results in a local web UI.
+Client-side Fabric mod for Minecraft 1.21.11. It scans chunks in an automatic
+7x7 window spiral and records configured block hits for a local web UI.
 
 ## Requirements
 
@@ -13,17 +13,22 @@ barrier and command blocks, then exposes results in a local web UI.
 
 ## Build
 
-1. `.\gradlew.bat build`
+1. `./gradlew.bat build`
 2. Find the output in `build/libs`.
 
 ## Run
 
 1. Install Fabric Loader for 1.21.11.
 2. Drop the mod jar and the Fabric API jar into your `mods` folder.
-3. Launch Minecraft.
-4. Open the web UI at `http://localhost:8080`.
+3. Launch Minecraft and join singleplayer or multiplayer.
+4. Put your player in spectator mode.
+5. Open the web UI at `http://localhost:8080`.
 
 ## Notes
 
-- Scanning is player-driven; it only scans around the chunk you stand in.
-- The map highlights the next target chunk to move to.
+- Scanning is automatic while enabled: the mod navigates the player through a
+  squared spiral that starts at chunk `0,0`.
+- Each waypoint scans a centered `7x7` chunk batch before advancing.
+- Traversal progress is persisted per server and per dimension, then resumed on
+  reconnect.
+- If you leave spectator mode, traversal pauses until spectator is restored.

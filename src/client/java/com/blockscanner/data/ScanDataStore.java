@@ -1,6 +1,11 @@
 package com.blockscanner.data;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -11,27 +16,28 @@ public class ScanDataStore {
     private final Map<String, ScanResult> foundBlocks = new ConcurrentHashMap<>();
     private final Set<ScannedChunk> scannedChunks = ConcurrentHashMap.newKeySet();
     private final Set<ScannedChunk> skippedChunks = ConcurrentHashMap.newKeySet();
+    private final Map<String, SpiralCursorState> traversalByDimension = new ConcurrentHashMap<>();
     private String currentServer;
     private String currentDimension;
 
     /**
      * Adds a found block to the data store.
      * Prevents duplicate entries for the same block position.
-     * 
+     *
      * @param result The scan result to add
      */
     public void addFoundBlock(ScanResult result) {
         if (result == null) {
             return;
         }
-        
+
         String positionKey = result.x() + "," + result.y() + "," + result.z() + "," + result.dimension();
         foundBlocks.put(positionKey, result);
     }
 
     /**
      * Marks a chunk as scanned in the specified dimension.
-     * 
+     *
      * @param chunkX The chunk X coordinate
      * @param chunkZ The chunk Z coordinate
      * @param dimension The dimension where the chunk was scanned
@@ -66,7 +72,7 @@ public class ScanDataStore {
 
     /**
      * Checks if a chunk has been scanned in the specified dimension.
-     * 
+     *
      * @param chunkX The chunk X coordinate
      * @param chunkZ The chunk Z coordinate
      * @param dimension The dimension to check
@@ -100,7 +106,7 @@ public class ScanDataStore {
 
     /**
      * Gets all found blocks as a list.
-     * 
+     *
      * @return A list of all found blocks
      */
     public List<ScanResult> getFoundBlocks() {
@@ -109,7 +115,7 @@ public class ScanDataStore {
 
     /**
      * Gets all scanned chunks as a set.
-     * 
+     *
      * @return A set of all scanned chunks
      */
     public Set<ScannedChunk> getScannedChunks() {
@@ -126,8 +132,56 @@ public class ScanDataStore {
     }
 
     /**
+     * Gets a traversal state for the given dimension, creating one if missing.
+     *
+     * @param dimension dimension id
+     * @return traversal state
+     */
+    public SpiralCursorState getOrCreateTraversalState(String dimension) {
+        if (dimension == null || dimension.isBlank()) {
+            throw new IllegalArgumentException("dimension cannot be null or empty");
+        }
+        return traversalByDimension.computeIfAbsent(dimension, ignored -> SpiralCursorState.initial());
+    }
+
+    /**
+     * Updates traversal state for a dimension.
+     *
+     * @param dimension dimension id
+     * @param state traversal cursor
+     */
+    public void updateTraversalState(String dimension, SpiralCursorState state) {
+        if (dimension == null || dimension.isBlank() || state == null) {
+            return;
+        }
+        traversalByDimension.put(dimension, state);
+    }
+
+    /**
+     * Gets traversal state for a dimension.
+     *
+     * @param dimension dimension id
+     * @return traversal cursor or null if none exists
+     */
+    public SpiralCursorState getTraversalState(String dimension) {
+        if (dimension == null || dimension.isBlank()) {
+            return null;
+        }
+        return traversalByDimension.get(dimension);
+    }
+
+    /**
+     * Gets traversal states across all dimensions.
+     *
+     * @return copy of traversal state map
+     */
+    public Map<String, SpiralCursorState> getTraversalStates() {
+        return new HashMap<>(traversalByDimension);
+    }
+
+    /**
      * Sets the current server address.
-     * 
+     *
      * @param serverAddress The server address
      */
     public void setCurrentServer(String serverAddress) {
@@ -136,7 +190,7 @@ public class ScanDataStore {
 
     /**
      * Gets the current server address.
-     * 
+     *
      * @return The current server address
      */
     public String getCurrentServer() {
@@ -145,7 +199,7 @@ public class ScanDataStore {
 
     /**
      * Sets the current dimension.
-     * 
+     *
      * @param dimension The current dimension
      */
     public void setCurrentDimension(String dimension) {
@@ -154,7 +208,7 @@ public class ScanDataStore {
 
     /**
      * Gets the current dimension.
-     * 
+     *
      * @return The current dimension
      */
     public String getCurrentDimension() {
@@ -163,7 +217,7 @@ public class ScanDataStore {
 
     /**
      * Creates a snapshot of the current data for JSON serialization.
-     * 
+     *
      * @return A ScanDataSnapshot containing all current data
      */
     public ScanDataSnapshot getSnapshot() {
@@ -171,13 +225,14 @@ public class ScanDataStore {
             currentServer != null ? currentServer : "unknown",
             getFoundBlocks(),
             new ArrayList<>(scannedChunks),
+            getTraversalStates(),
             System.currentTimeMillis()
         );
     }
 
     /**
      * Clears all session-only data (scanned chunks).
-     * Keeps persisted data (found blocks).
+     * Keeps persisted data (found blocks and traversal state).
      */
     public void clearSessionData() {
         scannedChunks.clear();
@@ -191,11 +246,12 @@ public class ScanDataStore {
         foundBlocks.clear();
         scannedChunks.clear();
         skippedChunks.clear();
+        traversalByDimension.clear();
     }
 
     /**
      * Loads data from a snapshot.
-     * 
+     *
      * @param snapshot The snapshot to load from
      */
     public void loadFromSnapshot(ScanDataSnapshot snapshot) {
@@ -205,11 +261,12 @@ public class ScanDataStore {
 
         clear();
         this.currentServer = snapshot.serverAddress();
-        
+
         for (ScanResult result : snapshot.foundBlocks()) {
             addFoundBlock(result);
         }
-        
+
         scannedChunks.addAll(snapshot.scannedChunks());
+        traversalByDimension.putAll(snapshot.traversalByDimension());
     }
 }

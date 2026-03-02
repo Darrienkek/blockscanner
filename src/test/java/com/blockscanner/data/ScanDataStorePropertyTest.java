@@ -1,10 +1,18 @@
 package com.blockscanner.data;
 
-import net.jqwik.api.*;
+import net.jqwik.api.Arbitraries;
+import net.jqwik.api.Arbitrary;
+import net.jqwik.api.Combinators;
+import net.jqwik.api.ForAll;
+import net.jqwik.api.Label;
+import net.jqwik.api.Property;
+import net.jqwik.api.Provide;
 import net.jqwik.api.constraints.IntRange;
-import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Property-based tests for ScanDataStore.
@@ -14,9 +22,9 @@ public class ScanDataStorePropertyTest {
 
     /**
      * Property 7: No Duplicate Block Entries
-     * For any block position (x, y, z, dimension), adding it to the data store multiple times 
+     * For any block position (x, y, z, dimension), adding it to the data store multiple times
      * SHALL result in exactly one entry for that position.
-     * 
+     *
      * **Validates: Requirements 3.5**
      */
     @Property(tries = 100)
@@ -30,27 +38,25 @@ public class ScanDataStorePropertyTest {
         @ForAll @IntRange(min = 2, max = 10) int duplicateCount
     ) {
         ScanDataStore store = new ScanDataStore();
-        
-        // Add the same block multiple times with different timestamps
+
         for (int i = 0; i < duplicateCount; i++) {
             ScanResult result = new ScanResult(blockType, x, y, z, dimension, System.currentTimeMillis() + i, null);
             store.addFoundBlock(result);
         }
-        
-        // Should have exactly one entry for this position
+
         List<ScanResult> foundBlocks = store.getFoundBlocks();
         long matchingBlocks = foundBlocks.stream()
             .filter(result -> result.x() == x && result.y() == y && result.z() == z && result.dimension().equals(dimension))
             .count();
-            
+
         assertEquals(1, matchingBlocks);
     }
 
     /**
      * Property 3: Chunk Scan Idempotence
-     * For any chunk that has been marked as scanned, attempting to scan it again 
+     * For any chunk that has been marked as scanned, attempting to scan it again
      * SHALL NOT add duplicate entries to the scan results or re-process the chunk.
-     * 
+     *
      * **Validates: Requirements 2.6**
      */
     @Property(tries = 100)
@@ -62,22 +68,48 @@ public class ScanDataStorePropertyTest {
         @ForAll @IntRange(min = 2, max = 10) int scanCount
     ) {
         ScanDataStore store = new ScanDataStore();
-        
-        // Create a simple ChunkPos-like structure for testing
-        // Mark the chunk as scanned multiple times
+
         for (int i = 0; i < scanCount; i++) {
             store.markChunkScanned(chunkX, chunkZ, dimension);
         }
-        
-        // Should have exactly one entry for this chunk
+
         long matchingChunks = store.getScannedChunks().stream()
             .filter(chunk -> chunk.chunkX() == chunkX && chunk.chunkZ() == chunkZ && chunk.dimension().equals(dimension))
             .count();
-            
+
         assertEquals(1, matchingChunks);
-        
-        // Should report as scanned
         assertTrue(store.isChunkScanned(chunkX, chunkZ, dimension));
+    }
+
+    @Property(tries = 100)
+    @Label("Feature: block-scanner-mod, Traversal state retained across session clears")
+    void traversalStateRetainedAcrossSessionClear(
+        @ForAll("dimensions") String dimension,
+        @ForAll("cursorStates") SpiralCursorState cursor
+    ) {
+        ScanDataStore store = new ScanDataStore();
+        store.updateTraversalState(dimension, cursor);
+
+        store.clearSessionData();
+
+        assertEquals(cursor, store.getTraversalState(dimension));
+    }
+
+    @Property(tries = 100)
+    @Label("Feature: block-scanner-mod, Traversal state round-trip via snapshot")
+    void traversalStateSnapshotRoundTrip(
+        @ForAll("dimensions") String dimension,
+        @ForAll("cursorStates") SpiralCursorState cursor
+    ) {
+        ScanDataStore store = new ScanDataStore();
+        store.setCurrentServer("singleplayer");
+        store.updateTraversalState(dimension, cursor);
+
+        ScanDataSnapshot snapshot = store.getSnapshot();
+        ScanDataStore restored = new ScanDataStore();
+        restored.loadFromSnapshot(snapshot);
+
+        assertEquals(cursor, restored.getTraversalState(dimension));
     }
 
     @Provide
@@ -88,5 +120,20 @@ public class ScanDataStorePropertyTest {
     @Provide
     Arbitrary<String> dimensions() {
         return Arbitraries.of("minecraft:overworld", "minecraft:the_nether", "minecraft:the_end");
+    }
+
+    @Provide
+    Arbitrary<SpiralCursorState> cursorStates() {
+        return Arbitraries.integers().between(1, 50)
+            .flatMap(legLength -> Combinators.combine(
+                Arbitraries.integers().between(-2000, 2000),
+                Arbitraries.integers().between(-2000, 2000),
+                Arbitraries.integers().between(0, 3),
+                Arbitraries.integers().between(0, legLength),
+                Arbitraries.integers().between(0, 1),
+                Arbitraries.longs().between(0, 1_000_000)
+            ).as((x, z, direction, steps, legsCompleted, completedWaypoints) ->
+                new SpiralCursorState(x, z, direction, legLength, steps, legsCompleted, completedWaypoints)
+            ));
     }
 }

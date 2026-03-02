@@ -185,17 +185,33 @@ public class WebServer {
         status.put("modVersion", modVersion);
         status.put("toggleCount", toggleCount.get());
         status.put("lastToggleAt", lastToggleAt.get());
-        
+
         List<ScanResult> blocks = dataStore.getFoundBlocks();
         status.put("totalBlocksFound", blocks.size());
         status.put("totalChunksScanned", dataStore.getScannedChunks().size());
-        
+
         Map<String, Integer> blockCounts = new HashMap<>();
         for (ScanResult block : blocks) {
             blockCounts.merge(block.blockType(), 1, Integer::sum);
         }
         status.put("blockCounts", blockCounts);
-        
+
+        ScanController.TraversalStatus traversalStatus = scanController.getTraversalStatusSnapshot();
+        Map<String, Object> traversal = new HashMap<>();
+        traversal.put("enabled", traversalStatus.enabled());
+        traversal.put("waitingForSpectator", traversalStatus.waitingForSpectator());
+        traversal.put("batchSideChunks", traversalStatus.batchSideChunks());
+        traversal.put("batchTotalChunks", traversalStatus.batchTotalChunks());
+        traversal.put("currentDimension", traversalStatus.currentDimension());
+        traversal.put("waypointGridX", traversalStatus.waypointGridX());
+        traversal.put("waypointGridZ", traversalStatus.waypointGridZ());
+        traversal.put("waypointCenterChunkX", traversalStatus.waypointCenterChunkX());
+        traversal.put("waypointCenterChunkZ", traversalStatus.waypointCenterChunkZ());
+        traversal.put("direction", traversalStatus.direction());
+        traversal.put("waypointsCompleted", traversalStatus.waypointsCompleted());
+        traversal.put("batchChunksScanned", traversalStatus.batchChunksScanned());
+        status.put("traversal", traversal);
+
         String json = gson.toJson(status);
         
         addCorsHeaders(exchange);
@@ -322,10 +338,14 @@ public class WebServer {
         String body = readRequestBody(exchange);
         com.google.gson.JsonObject payload = gson.fromJson(body, com.google.gson.JsonObject.class);
         List<String> targetBlocks = null;
+        List<String> announceBlocks = null;
         Boolean rescanScannedChunks = null;
         Boolean scanSigns = null;
         if (payload != null && payload.has("targetBlocks")) {
             targetBlocks = toStringList(payload.get("targetBlocks"));
+        }
+        if (payload != null && payload.has("announceBlocks")) {
+            announceBlocks = toStringList(payload.get("announceBlocks"));
         }
         if (payload != null && payload.has("rescanScannedChunks")) {
             rescanScannedChunks = toBoolean(payload.get("rescanScannedChunks"));
@@ -334,7 +354,7 @@ public class WebServer {
             scanSigns = toBoolean(payload.get("scanSigns"));
         }
 
-        String error = scanController.updateConfig(targetBlocks, rescanScannedChunks, scanSigns);
+        String error = scanController.updateConfig(targetBlocks, announceBlocks, rescanScannedChunks, scanSigns);
         if (error != null) {
             Map<String, Object> response = buildConfigResponse();
             response.put("error", error);
@@ -445,6 +465,7 @@ public class WebServer {
     private Map<String, Object> buildConfigResponse() {
         Map<String, Object> config = new HashMap<>();
         config.put("targetBlocks", scanController.getTargetBlocks());
+        config.put("announceBlocks", scanController.getAnnounceBlocks());
         config.put("rescanScannedChunks", scanController.isRescanScannedChunks());
         config.put("scanSigns", scanController.isScanSigns());
         return config;
@@ -721,14 +742,29 @@ public class WebServer {
                         display: flex;
                         justify-content: space-between;
                         gap: 10px;
-                    }
-                    .panel-toggle {
+                    }                    .panel-toggle {
                         display: flex;
                         align-items: center;
                         gap: 8px;
                         font-size: 12px;
                         color: #cccccc;
                         margin-bottom: 10px;
+                    }
+                    .traversal-status {
+                        margin-top: 12px;
+                        display: grid;
+                        gap: 6px;
+                        font-size: 12px;
+                        color: #cccccc;
+                    }
+                    .traversal-row {
+                        display: flex;
+                        justify-content: space-between;
+                        gap: 10px;
+                    }
+                    .traversal-row span:last-child {
+                        text-align: right;
+                        color: #ffffff;
                     }
                 </style>
             </head>
@@ -775,6 +811,15 @@ public class WebServer {
                                     <div class="stat-label">Scanned Chunks</div>
                                 </div>
                             </div>
+                            <div id="traversal-status" class="traversal-status">
+                                <div class="traversal-row"><span>State</span><span id="traversal-state">Idle</span></div>
+                                <div class="traversal-row"><span>Dimension</span><span id="traversal-dimension">-</span></div>
+                                <div class="traversal-row"><span>Waypoint</span><span id="traversal-waypoint">0, 0</span></div>
+                                <div class="traversal-row"><span>Center Chunk</span><span id="traversal-center">0, 0</span></div>
+                                <div class="traversal-row"><span>Direction</span><span id="traversal-direction">+X</span></div>
+                                <div class="traversal-row"><span>Batch Progress</span><span id="traversal-progress">0 / 49</span></div>
+                                <div class="traversal-row"><span>Waypoints Done</span><span id="traversal-completed">0</span></div>
+                            </div>
                         </div>
                     </div>
 
@@ -799,6 +844,11 @@ public class WebServer {
                             </div>
                             <textarea id="target-blocks" class="config-input" placeholder="minecraft:barrier&#10;minecraft:command_block"></textarea>
                             <div class="config-note">Tip: use full ids like minecraft:diamond_block or modid:custom_block.</div>
+                            <div class="config-row">
+                                <label for="announce-blocks">Announce block IDs in server chat (comma or newline separated)</label>
+                            </div>
+                            <textarea id="announce-blocks" class="config-input" placeholder="minecraft:beacon&#10;minecraft:spawner"></textarea>
+                            <div class="config-note">Only blocks listed here are announced to server chat. Leave empty to disable announcements.</div>
                             <div class="config-warning" id="block-warning"></div>
                             <div class="config-row">
                                 <label for="rescan-toggle">Rescan already scanned chunks</label>
@@ -910,9 +960,13 @@ public class WebServer {
                             return;
                         }
                         const targetBlocksInput = document.getElementById('target-blocks');
+                        const announceBlocksInput = document.getElementById('announce-blocks');
                         const rescanToggle = document.getElementById('rescan-toggle');
 
                         targetBlocksInput.value = formatTargetBlocks(config.targetBlocks);
+                        if (announceBlocksInput) {
+                            announceBlocksInput.value = formatTargetBlocks(config.announceBlocks);
+                        }
                         rescanToggle.checked = Boolean(config.rescanScannedChunks);
                         updateBlockWarning(parseTargetBlocks(targetBlocksInput.value));
                     }
@@ -944,6 +998,7 @@ public class WebServer {
                         statusEl.textContent = 'Saving...';
 
                         const targetBlocks = parseTargetBlocks(document.getElementById('target-blocks').value);
+                        const announceBlocks = parseTargetBlocks(document.getElementById('announce-blocks')?.value);
                         const rescanScannedChunks = document.getElementById('rescan-toggle').checked;
 
                         const validationError = validateConfigInputs(targetBlocks);
@@ -961,6 +1016,7 @@ public class WebServer {
                                 },
                                 body: JSON.stringify({
                                     targetBlocks: targetBlocks,
+                                    announceBlocks: announceBlocks,
                                     rescanScannedChunks: rescanScannedChunks
                                 })
                             });
@@ -1004,6 +1060,42 @@ public class WebServer {
                         document.getElementById('total-blocks').textContent = status.totalBlocksFound;
                         document.getElementById('total-chunks').textContent = status.totalChunksScanned;
                         updateBlockCounts(status.blockCounts || {});
+                        updateTraversalPanel(status.traversal || null);
+                    }
+
+                    function updateTraversalPanel(traversal) {
+                        const stateEl = document.getElementById('traversal-state');
+                        const dimensionEl = document.getElementById('traversal-dimension');
+                        const waypointEl = document.getElementById('traversal-waypoint');
+                        const centerEl = document.getElementById('traversal-center');
+                        const directionEl = document.getElementById('traversal-direction');
+                        const progressEl = document.getElementById('traversal-progress');
+                        const completedEl = document.getElementById('traversal-completed');
+
+                        if (!stateEl || !dimensionEl || !waypointEl || !centerEl || !directionEl || !progressEl || !completedEl) {
+                            return;
+                        }
+
+                        const enabled = Boolean(traversal?.enabled);
+                        const waiting = Boolean(traversal?.waitingForSpectator);
+                        if (!enabled) {
+                            stateEl.textContent = 'Inactive';
+                        } else if (waiting) {
+                            stateEl.textContent = 'Waiting for Spectator';
+                        } else {
+                            stateEl.textContent = 'Active';
+                        }
+
+                        const traversalDimension = traversal?.currentDimension || currentDimension || 'unknown';
+                        dimensionEl.textContent = getDimensionDisplayName(traversalDimension);
+                        waypointEl.textContent = `${traversal?.waypointGridX ?? 0}, ${traversal?.waypointGridZ ?? 0}`;
+                        centerEl.textContent = `${traversal?.waypointCenterChunkX ?? 0}, ${traversal?.waypointCenterChunkZ ?? 0}`;
+                        directionEl.textContent = traversal?.direction || '+X';
+
+                        const scanned = traversal?.batchChunksScanned ?? 0;
+                        const total = traversal?.batchTotalChunks ?? 49;
+                        progressEl.textContent = `${scanned} / ${total}`;
+                        completedEl.textContent = `${traversal?.waypointsCompleted ?? 0}`;
                     }
 
                     function setStatusError(message) {
@@ -1042,9 +1134,20 @@ public class WebServer {
                         const blockList = document.getElementById('block-list');
                         const signList = document.getElementById('sign-list');
 
+                        const blockScrollTop = blockList ? blockList.scrollTop : 0;
+                        const signScrollTop = signList ? signList.scrollTop : 0;
+                        const blockAtBottom = blockList ? (blockList.scrollTop + blockList.clientHeight >= blockList.scrollHeight - 5) : false;
+                        const signAtBottom = signList ? (signList.scrollTop + signList.clientHeight >= signList.scrollHeight - 5) : false;
+
                         if (blocksData.length === 0) {
-                            blockList.innerHTML = '<div style="text-align: center; color: #888;">No blocks found yet</div>';
-                            signList.innerHTML = '<div style="text-align: center; color: #888;">No signs found yet</div>';
+                            if (blockList) {
+                                blockList.innerHTML = '<div style=\\'text-align: center; color: #888;\\'>No blocks found yet</div>';
+                                blockList.scrollTop = blockScrollTop;
+                            }
+                            if (signList) {
+                                signList.innerHTML = '<div style=\\'text-align: center; color: #888;\\'>No signs found yet</div>';
+                                signList.scrollTop = signScrollTop;
+                            }
                             return;
                         }
 
@@ -1065,8 +1168,14 @@ public class WebServer {
                             groupedBlocks[block.blockType].push(block);
                         });
 
-                        blockList.innerHTML = renderGroupedBlocks(groupedBlocks, 'No non-sign blocks found yet');
-                        signList.innerHTML = renderGroupedBlocks(groupedSigns, 'No signs found yet');
+                        if (blockList) {
+                            blockList.innerHTML = renderGroupedBlocks(groupedBlocks, 'No non-sign blocks found yet');
+                            blockList.scrollTop = blockAtBottom ? blockList.scrollHeight : blockScrollTop;
+                        }
+                        if (signList) {
+                            signList.innerHTML = renderGroupedBlocks(groupedSigns, 'No signs found yet');
+                            signList.scrollTop = signAtBottom ? signList.scrollHeight : signScrollTop;
+                        }
                     }
 
                     function renderGroupedBlocks(groupedBlocks, emptyMessage) {
@@ -1473,12 +1582,16 @@ public class WebServer {
                   return;
                 }
                 const targetBlocksInput = document.getElementById('target-blocks');
+                const announceBlocksInput = document.getElementById('announce-blocks');
                 const rescanToggle = document.getElementById('rescan-toggle');
                 const signsToggle = document.getElementById('signs-toggle');
                 const signsPanel = document.getElementById('signs-panel');
              
                 if (targetBlocksInput) {
                   targetBlocksInput.value = formatTargetBlocks(config.targetBlocks);
+                }
+                if (announceBlocksInput) {
+                  announceBlocksInput.value = formatTargetBlocks(config.announceBlocks);
                 }
                 if (rescanToggle) {
                   rescanToggle.checked = Boolean(config.rescanScannedChunks);
@@ -1526,6 +1639,7 @@ public class WebServer {
                 }
              
                 const targetBlocks = parseTargetBlocks(document.getElementById('target-blocks')?.value);
+                const announceBlocks = parseTargetBlocks(document.getElementById('announce-blocks')?.value);
                 const rescanScannedChunks = Boolean(document.getElementById('rescan-toggle')?.checked);
                 const scanSigns = Boolean(document.getElementById('signs-toggle')?.checked);
              
@@ -1546,6 +1660,7 @@ public class WebServer {
                     },
                   body: JSON.stringify({
                     targetBlocks: targetBlocks,
+                    announceBlocks: announceBlocks,
                     rescanScannedChunks: rescanScannedChunks,
                     scanSigns: scanSigns
                   })
@@ -1575,48 +1690,66 @@ public class WebServer {
               }
             
               function updateStatus(status) {
-                const statusEl = document.getElementById('status');
-                const statusText = document.getElementById('status-text');
-                const toggleButton = document.getElementById('toggle-button');
-                
-                const dimensionName = getDimensionDisplayName(currentDimension);
-                
-                if (status.scanning) {
-                  if (statusEl) {
-                    statusEl.className = 'status active';
-                  }
-                  if (statusText) {
-                    statusText.textContent = `Scanning Active - Server: ${status.serverAddress} - Dimension: ${dimensionName}`;
-                  }
-                  if (toggleButton) {
-                    toggleButton.textContent = 'Stop Scanning';
-                    toggleButton.className = 'toggle-button stop';
-                  }
-                } else {
-                  if (statusEl) {
-                    statusEl.className = 'status inactive';
-                  }
-                  if (statusText) {
-                    statusText.textContent = `Scanning Inactive - Server: ${status.serverAddress} - Dimension: ${dimensionName}`;
-                  }
-                  if (toggleButton) {
-                    toggleButton.textContent = 'Start Scanning';
-                    toggleButton.className = 'toggle-button';
-                  }
-                }
-                
-                const totalBlocksEl = document.getElementById('total-blocks');
-                const totalChunksEl = document.getElementById('total-chunks');
-                if (totalBlocksEl) {
-                  totalBlocksEl.textContent = status.totalBlocksFound;
-                }
-                if (totalChunksEl) {
-                  totalChunksEl.textContent = status.totalChunksScanned;
-                }
-                updateBlockCounts(status.blockCounts || {});
-              }
-              
-              function setStatusError(message) {
+                        const statusEl = document.getElementById('status');
+                        const statusText = document.getElementById('status-text');
+                        const toggleButton = document.getElementById('toggle-button');
+
+                        const dimensionName = getDimensionDisplayName(currentDimension);
+
+                        if (status.scanning) {
+                            statusEl.className = 'status active';
+                            statusText.textContent = `Scanning Active - Server: ${status.serverAddress} - Dimension: ${dimensionName}`;
+                            toggleButton.textContent = 'Stop Scanning';
+                            toggleButton.className = 'toggle-button stop';
+                        } else {
+                            statusEl.className = 'status inactive';
+                            statusText.textContent = `Scanning Inactive - Server: ${status.serverAddress} - Dimension: ${dimensionName}`;
+                            toggleButton.textContent = 'Start Scanning';
+                            toggleButton.className = 'toggle-button';
+                        }
+
+                        document.getElementById('total-blocks').textContent = status.totalBlocksFound;
+                        document.getElementById('total-chunks').textContent = status.totalChunksScanned;
+                        updateBlockCounts(status.blockCounts || {});
+                        updateTraversalPanel(status.traversal || null);
+                    }
+
+                    function updateTraversalPanel(traversal) {
+                        const stateEl = document.getElementById('traversal-state');
+                        const dimensionEl = document.getElementById('traversal-dimension');
+                        const waypointEl = document.getElementById('traversal-waypoint');
+                        const centerEl = document.getElementById('traversal-center');
+                        const directionEl = document.getElementById('traversal-direction');
+                        const progressEl = document.getElementById('traversal-progress');
+                        const completedEl = document.getElementById('traversal-completed');
+
+                        if (!stateEl || !dimensionEl || !waypointEl || !centerEl || !directionEl || !progressEl || !completedEl) {
+                            return;
+                        }
+
+                        const enabled = Boolean(traversal?.enabled);
+                        const waiting = Boolean(traversal?.waitingForSpectator);
+                        if (!enabled) {
+                            stateEl.textContent = 'Inactive';
+                        } else if (waiting) {
+                            stateEl.textContent = 'Waiting for Spectator';
+                        } else {
+                            stateEl.textContent = 'Active';
+                        }
+
+                        const traversalDimension = traversal?.currentDimension || currentDimension || 'unknown';
+                        dimensionEl.textContent = getDimensionDisplayName(traversalDimension);
+                        waypointEl.textContent = `${traversal?.waypointGridX ?? 0}, ${traversal?.waypointGridZ ?? 0}`;
+                        centerEl.textContent = `${traversal?.waypointCenterChunkX ?? 0}, ${traversal?.waypointCenterChunkZ ?? 0}`;
+                        directionEl.textContent = traversal?.direction || '+X';
+
+                        const scanned = traversal?.batchChunksScanned ?? 0;
+                        const total = traversal?.batchTotalChunks ?? 49;
+                        progressEl.textContent = `${scanned} / ${total}`;
+                        completedEl.textContent = `${traversal?.waypointsCompleted ?? 0}`;
+                    }
+
+                    function setStatusError(message) {
                 const statusEl = document.getElementById('status');
                 const statusText = document.getElementById('status-text');
                 const toggleButton = document.getElementById('toggle-button');
@@ -1661,17 +1794,24 @@ public class WebServer {
               function updateBlockList() {
                 const blockList = document.getElementById('block-list');
                 const signList = document.getElementById('sign-list');
-            
+
+                const blockScrollTop = blockList ? blockList.scrollTop : 0;
+                const signScrollTop = signList ? signList.scrollTop : 0;
+                const blockAtBottom = blockList ? (blockList.scrollTop + blockList.clientHeight >= blockList.scrollHeight - 5) : false;
+                const signAtBottom = signList ? (signList.scrollTop + signList.clientHeight >= signList.scrollHeight - 5) : false;
+
                 if (blocksData.length === 0) {
                   if (blockList) {
-                    blockList.innerHTML = '<div style="text-align: center; color: #888;">No blocks found yet</div>';
+                    blockList.innerHTML = '<div style=\\'text-align: center; color: #888;\\'>No blocks found yet</div>';
+                    blockList.scrollTop = blockScrollTop;
                   }
                   if (signList) {
-                    signList.innerHTML = '<div style="text-align: center; color: #888;">No signs found yet</div>';
+                    signList.innerHTML = '<div style=\\'text-align: center; color: #888;\\'>No signs found yet</div>';
+                    signList.scrollTop = signScrollTop;
                   }
                   return;
                 }
-            
+
                 const groupedBlocks = {};
                 const groupedSigns = {};
                 blocksData.forEach(block => {
@@ -1682,18 +1822,20 @@ public class WebServer {
                     groupedSigns[block.blockType].push(block);
                     return;
                   }
-            
+
                   if (!groupedBlocks[block.blockType]) {
                     groupedBlocks[block.blockType] = [];
                   }
                   groupedBlocks[block.blockType].push(block);
                 });
-            
+
                 if (blockList) {
                   blockList.innerHTML = renderGroupedBlocks(groupedBlocks, 'No non-sign blocks found yet');
+                  blockList.scrollTop = blockAtBottom ? blockList.scrollHeight : blockScrollTop;
                 }
                 if (signList) {
                   signList.innerHTML = renderGroupedBlocks(groupedSigns, 'No signs found yet');
+                  signList.scrollTop = signAtBottom ? signList.scrollHeight : signScrollTop;
                 }
               }
             

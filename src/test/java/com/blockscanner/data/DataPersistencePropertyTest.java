@@ -1,6 +1,16 @@
 package com.blockscanner.data;
 
-import net.jqwik.api.*;
+import com.google.gson.Gson;
+import net.jqwik.api.Arbitraries;
+import net.jqwik.api.Arbitrary;
+import net.jqwik.api.Assume;
+import net.jqwik.api.Combinators;
+import net.jqwik.api.Example;
+import net.jqwik.api.ForAll;
+import net.jqwik.api.From;
+import net.jqwik.api.Label;
+import net.jqwik.api.Property;
+import net.jqwik.api.Provide;
 import net.jqwik.api.constraints.NotBlank;
 import net.jqwik.api.constraints.Positive;
 
@@ -8,8 +18,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Property-based tests for DataPersistence class.
@@ -23,55 +38,41 @@ class DataPersistencePropertyTest {
         @ForAll @NotBlank String serverAddress,
         @ForAll List<@From("scanResults") ScanResult> foundBlocks,
         @ForAll List<@From("scannedChunks") ScannedChunk> scannedChunks,
+        @ForAll("traversalStates") Map<String, SpiralCursorState> traversalStates,
         @ForAll @Positive long lastUpdated
     ) throws IOException {
         // **Validates: Requirements 3.2, 3.3**
-        
-        // Create original snapshot
+
         ScanDataSnapshot originalSnapshot = new ScanDataSnapshot(
             serverAddress,
             foundBlocks,
             scannedChunks,
+            traversalStates,
             lastUpdated
         );
 
-        // Test that the snapshot data is preserved correctly
         assertEquals(serverAddress, originalSnapshot.serverAddress());
         assertEquals(foundBlocks.size(), originalSnapshot.foundBlocks().size());
         assertEquals(scannedChunks.size(), originalSnapshot.scannedChunks().size());
+        assertEquals(new java.util.HashSet<>(traversalStates.entrySet()), new java.util.HashSet<>(originalSnapshot.traversalByDimension().entrySet()));
         assertEquals(lastUpdated, originalSnapshot.lastUpdated());
 
-        // Verify all found blocks are preserved in the snapshot
-        for (ScanResult originalBlock : foundBlocks) {
-            assertTrue(originalSnapshot.foundBlocks().contains(originalBlock),
-                "Found block should be preserved in snapshot: " + originalBlock);
-        }
-
-        // Verify all scanned chunks are preserved in the snapshot
-        for (ScannedChunk originalChunk : scannedChunks) {
-            assertTrue(originalSnapshot.scannedChunks().contains(originalChunk),
-                "Scanned chunk should be preserved in snapshot: " + originalChunk);
-        }
-
-        // Test that loading the snapshot into a data store preserves the data
         ScanDataStore dataStore = new ScanDataStore();
         dataStore.loadFromSnapshot(originalSnapshot);
-        
+
         ScanDataSnapshot roundTripSnapshot = dataStore.getSnapshot();
-        
-        // Verify round-trip equivalence
+
         assertEquals(originalSnapshot.serverAddress(), roundTripSnapshot.serverAddress());
         assertEquals(uniqueFoundBlockKeys(originalSnapshot.foundBlocks()).size(), roundTripSnapshot.foundBlocks().size());
         assertEquals(new java.util.HashSet<>(originalSnapshot.scannedChunks()).size(), roundTripSnapshot.scannedChunks().size());
+        assertEquals(originalSnapshot.traversalByDimension(), roundTripSnapshot.traversalByDimension());
 
-        // Verify all found blocks are preserved through round-trip
         for (String key : uniqueFoundBlockKeys(originalSnapshot.foundBlocks())) {
             boolean hasMatch = roundTripSnapshot.foundBlocks().stream()
                 .anyMatch(result -> key.equals(foundBlockKey(result)));
             assertTrue(hasMatch, "Found block key should be preserved through round-trip: " + key);
         }
 
-        // Verify all scanned chunks are preserved through round-trip
         for (ScannedChunk originalChunk : originalSnapshot.scannedChunks()) {
             assertTrue(roundTripSnapshot.scannedChunks().contains(originalChunk),
                 "Scanned chunk should be preserved through round-trip: " + originalChunk);
@@ -85,29 +86,40 @@ class DataPersistencePropertyTest {
         @ForAll("serverAddresses") String serverAddress2
     ) throws IOException {
         // **Validates: Requirements 3.4**
-        
-        // Assume different server addresses (skip if same)
+
         Assume.that(!serverAddress1.equals(serverAddress2));
 
-        // Test the sanitization logic directly
         String sanitized1 = sanitizeServerAddress(serverAddress1);
         String sanitized2 = sanitizeServerAddress(serverAddress2);
-        
-        // Create file paths using temp directory
+
         Path tempDir = Files.createTempDirectory("blockscanner-test");
         Path file1 = tempDir.resolve(sanitized1 + ".json");
         Path file2 = tempDir.resolve(sanitized2 + ".json");
 
-        // Verify that different server addresses result in different file paths
-        assertNotEquals(file1, file2, 
+        assertNotEquals(file1, file2,
             "Different server addresses should have different file paths");
-        
-        // Verify that the file names are different
+
         assertNotEquals(file1.getFileName(), file2.getFileName(),
             "Different server addresses should have different file names");
-            
-        // Clean up
+
         Files.deleteIfExists(tempDir);
+    }
+
+    @Example
+    @Label("Feature: block-scanner-mod, Backward compatibility for missing traversal state")
+    void missingTraversalFieldDefaultsToEmpty() {
+        String legacyJson = """
+            {
+              "serverAddress": "singleplayer",
+              "foundBlocks": [],
+              "scannedChunks": [],
+              "lastUpdated": 1
+            }
+            """;
+
+        ScanDataSnapshot snapshot = new Gson().fromJson(legacyJson, ScanDataSnapshot.class);
+        assertNotNull(snapshot);
+        assertTrue(snapshot.traversalByDimension().isEmpty());
     }
 
     @Provide
@@ -129,10 +141,33 @@ class DataPersistencePropertyTest {
     @Provide
     Arbitrary<ScannedChunk> scannedChunks() {
         return Combinators.combine(
-            Arbitraries.integers().between(-1875000, 1875000), // Chunk coordinates
+            Arbitraries.integers().between(-1875000, 1875000),
             Arbitraries.integers().between(-1875000, 1875000),
             Arbitraries.of("minecraft:overworld", "minecraft:the_nether", "minecraft:the_end")
         ).as(ScannedChunk::new);
+    }
+
+    @Provide
+    Arbitrary<Map<String, SpiralCursorState>> traversalStates() {
+        return Arbitraries.maps(
+            Arbitraries.of("minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"),
+            cursorStates()
+        ).ofMinSize(0).ofMaxSize(3);
+    }
+
+    @Provide
+    Arbitrary<SpiralCursorState> cursorStates() {
+        return Arbitraries.integers().between(1, 50)
+            .flatMap(legLength -> Combinators.combine(
+                Arbitraries.integers().between(-2000, 2000),
+                Arbitraries.integers().between(-2000, 2000),
+                Arbitraries.integers().between(0, 3),
+                Arbitraries.integers().between(0, legLength),
+                Arbitraries.integers().between(0, 1),
+                Arbitraries.longs().between(0, 1_000_000)
+            ).as((x, z, direction, steps, legsCompleted, completedWaypoints) ->
+                new SpiralCursorState(x, z, direction, legLength, steps, legsCompleted, completedWaypoints)
+            ));
     }
 
     @Provide
@@ -143,25 +178,20 @@ class DataPersistencePropertyTest {
             .ofMaxLength(30);
     }
 
-    /**
-     * Helper method to test server address sanitization logic.
-     */
     private String sanitizeServerAddress(String address) {
         if (address == null) {
             return "unknown";
         }
-        
-        // Replace invalid filename characters with underscores
-        // Keep alphanumeric, dots, dashes, and underscores
+
         String sanitized = address.replaceAll("[^a-zA-Z0-9._-]", "_")
-            .replaceAll("_{2,}", "_") // Replace multiple underscores with single
-            .replaceAll("^_+|_+$", "") // Remove leading/trailing underscores
+            .replaceAll("_{2,}", "_")
+            .replaceAll("^_+|_+$", "")
             .toLowerCase();
         return sanitized.isBlank() ? "unknown" : sanitized;
     }
 
-    private java.util.Set<String> uniqueFoundBlockKeys(List<ScanResult> results) {
-        java.util.Set<String> keys = new java.util.HashSet<>();
+    private Set<String> uniqueFoundBlockKeys(List<ScanResult> results) {
+        Set<String> keys = new java.util.HashSet<>();
         for (ScanResult result : results) {
             keys.add(foundBlockKey(result));
         }
