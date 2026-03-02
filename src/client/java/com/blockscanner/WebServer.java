@@ -136,6 +136,7 @@ public class WebServer {
         }
         
         List<ScanResult> blocks = dataStore.getFoundBlocks();
+        blocks.addAll(dataStore.getFoundEntities());
         String json = gson.toJson(blocks);
         
         addCorsHeaders(exchange);
