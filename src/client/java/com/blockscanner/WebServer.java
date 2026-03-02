@@ -16,6 +16,7 @@ import net.minecraft.util.math.ChunkPos;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
@@ -135,8 +136,20 @@ public class WebServer {
             return;
         }
         
+        Map<String, String> queryParams = parseQueryParams(exchange);
+        boolean includeSigns = getBooleanQueryParam(queryParams, "includeSigns", true);
+
         List<ScanResult> blocks = dataStore.getFoundBlocks();
         blocks.addAll(dataStore.getFoundEntities());
+        if (!includeSigns) {
+            List<ScanResult> filtered = new java.util.ArrayList<>(blocks.size());
+            for (ScanResult block : blocks) {
+                if (!isSignBlockType(block.blockType())) {
+                    filtered.add(block);
+                }
+            }
+            blocks = filtered;
+        }
         String json = gson.toJson(blocks);
         
         addCorsHeaders(exchange);
@@ -461,6 +474,62 @@ public class WebServer {
             return value.getAsBoolean();
         }
         return null;
+    }
+
+    private Map<String, String> parseQueryParams(HttpExchange exchange) {
+        Map<String, String> queryParams = new HashMap<>();
+        String rawQuery = exchange.getRequestURI() != null ? exchange.getRequestURI().getRawQuery() : null;
+        if (rawQuery == null || rawQuery.isBlank()) {
+            return queryParams;
+        }
+
+        String[] pairs = rawQuery.split("&");
+        for (String pair : pairs) {
+            if (pair == null || pair.isBlank()) {
+                continue;
+            }
+
+            int separator = pair.indexOf('=');
+            String rawKey = separator >= 0 ? pair.substring(0, separator) : pair;
+            String rawValue = separator >= 0 ? pair.substring(separator + 1) : "true";
+
+            String key = URLDecoder.decode(rawKey, StandardCharsets.UTF_8);
+            String value = URLDecoder.decode(rawValue, StandardCharsets.UTF_8);
+            if (!key.isBlank()) {
+                queryParams.put(key, value);
+            }
+        }
+        return queryParams;
+    }
+
+    private boolean getBooleanQueryParam(Map<String, String> queryParams, String key, boolean defaultValue) {
+        String value = queryParams.get(key);
+        if (value == null) {
+            return defaultValue;
+        }
+
+        String normalized = value.trim().toLowerCase();
+        if (normalized.isEmpty()) {
+            return true;
+        }
+        if ("true".equals(normalized) || "1".equals(normalized) || "yes".equals(normalized) || "on".equals(normalized)) {
+            return true;
+        }
+        if ("false".equals(normalized) || "0".equals(normalized) || "no".equals(normalized) || "off".equals(normalized)) {
+            return false;
+        }
+        return defaultValue;
+    }
+
+    private boolean isSignBlockType(String blockType) {
+        if (blockType == null || blockType.isBlank()) {
+            return false;
+        }
+        String lower = blockType.toLowerCase();
+        return lower.endsWith("_sign")
+            || lower.endsWith("_wall_sign")
+            || lower.endsWith("_hanging_sign")
+            || lower.endsWith("_wall_hanging_sign");
     }
 
     private Map<String, Object> buildConfigResponse() {
@@ -1497,6 +1566,12 @@ public class WebServer {
               let configData = {};
               let statusData = {};
               const centeredChunkMap = {};
+              const MAX_RENDERED_BLOCKS = 1200;
+              const MAX_RENDERED_SIGNS = 400;
+              const BLOCK_POLL_FALLBACK_TICKS = 6;
+              let lastBlocksTotal = -1;
+              let lastIncludeSigns = null;
+              let ticksSinceBlocksFetch = BLOCK_POLL_FALLBACK_TICKS;
               
               const apiBase = window.location.protocol === 'file:' ? 'http://localhost:8080' : '';
             
@@ -1506,19 +1581,35 @@ public class WebServer {
             
               async function fetchData() {
                 try {
-                  const [statusRes, blocksRes, chunksRes, playerRes] = await Promise.all([
+                  const [statusRes, chunksRes, playerRes] = await Promise.all([
                     fetch(apiUrl('/api/status')),
-                    fetch(apiUrl('/api/blocks')),
                     fetch(apiUrl('/api/chunks')),
                     fetch(apiUrl('/api/player'))
                   ]);
                   
                   statusData = await statusRes.json();
-                  blocksData = await blocksRes.json();
                   const chunkPayload = await chunksRes.json();
                   chunksData = chunkPayload.scannedChunks || [];
                   skippedChunksData = chunkPayload.skippedChunks || [];
                   playerData = await playerRes.json();
+
+                  const signsEnabled = Boolean(document.getElementById('signs-toggle')?.checked);
+                  const totalBlocks = Number(statusData?.totalBlocksFound ?? 0);
+                  const shouldRefreshBlocks = blocksData.length === 0
+                    || lastBlocksTotal !== totalBlocks
+                    || lastIncludeSigns !== signsEnabled
+                    || ticksSinceBlocksFetch >= BLOCK_POLL_FALLBACK_TICKS;
+
+                  if (shouldRefreshBlocks) {
+                    const blocksRes = await fetch(apiUrl(`/api/blocks?includeSigns=${signsEnabled ? '1' : '0'}`));
+                    blocksData = await blocksRes.json();
+                    lastBlocksTotal = totalBlocks;
+                    lastIncludeSigns = signsEnabled;
+                    ticksSinceBlocksFetch = 0;
+                    updateBlockList();
+                  } else {
+                    ticksSinceBlocksFetch += 1;
+                  }
                   
                   if (playerData.dimension && playerData.dimension !== currentDimension) {
                     currentDimension = playerData.dimension;
@@ -1526,7 +1617,6 @@ public class WebServer {
                   }
                   
                   updateStatus(statusData);
-                  updateBlockList();
                   updateChunkMap();
                 } catch (error) {
                   console.error('Error fetching data:', error);
@@ -1815,38 +1905,56 @@ public class WebServer {
 
                 const groupedBlocks = {};
                 const groupedSigns = {};
-                blocksData.forEach(block => {
+                const sortedBlocks = [...blocksData].sort((a, b) => (Number(b?.timestamp) || 0) - (Number(a?.timestamp) || 0));
+                let totalNonSign = 0;
+                let totalSigns = 0;
+                let shownNonSign = 0;
+                let shownSigns = 0;
+                sortedBlocks.forEach(block => {
                   if (isSignBlock(block.blockType)) {
+                    totalSigns += 1;
+                    if (shownSigns >= MAX_RENDERED_SIGNS) {
+                      return;
+                    }
                     if (!groupedSigns[block.blockType]) {
                       groupedSigns[block.blockType] = [];
                     }
                     groupedSigns[block.blockType].push(block);
+                    shownSigns += 1;
                     return;
                   }
 
+                  totalNonSign += 1;
+                  if (shownNonSign >= MAX_RENDERED_BLOCKS) {
+                    return;
+                  }
                   if (!groupedBlocks[block.blockType]) {
                     groupedBlocks[block.blockType] = [];
                   }
                   groupedBlocks[block.blockType].push(block);
+                  shownNonSign += 1;
                 });
 
                 if (blockList) {
-                  blockList.innerHTML = renderGroupedBlocks(groupedBlocks, 'No non-sign blocks found yet');
+                  blockList.innerHTML = renderGroupedBlocks(groupedBlocks, 'No non-sign blocks found yet', totalNonSign, shownNonSign);
                   blockList.scrollTop = blockAtBottom ? blockList.scrollHeight : blockScrollTop;
                 }
                 if (signList) {
-                  signList.innerHTML = renderGroupedBlocks(groupedSigns, 'No signs found yet');
+                  signList.innerHTML = renderGroupedBlocks(groupedSigns, 'No signs found yet', totalSigns, shownSigns);
                   signList.scrollTop = signAtBottom ? signList.scrollHeight : signScrollTop;
                 }
               }
             
-              function renderGroupedBlocks(groupedBlocks, emptyMessage) {
+              function renderGroupedBlocks(groupedBlocks, emptyMessage, totalCount, shownCount) {
                 const keys = Object.keys(groupedBlocks).sort();
                 if (keys.length === 0) {
                   return `<div style="text-align: center; color: #888;">${emptyMessage}</div>`;
                 }
             
                 let html = '';
+                if (Number.isFinite(totalCount) && Number.isFinite(shownCount) && totalCount > shownCount) {
+                  html += `<div style="font-size: 12px; color: #f0ad4e; margin-bottom: 8px;">Showing latest ${shownCount} of ${totalCount} entries.</div>`;
+                }
                 keys.forEach(blockType => {
                   html += `<h3>${formatBlockLabel(blockType)}</h3>`;
                   groupedBlocks[blockType].forEach(block => {
@@ -1919,12 +2027,15 @@ public class WebServer {
                 
                 const width = maxX - minX + 1;
                 chunkMap.style.gridTemplateColumns = `repeat(${width}, 1fr)`;
+                const scannedChunks = new Set(dimensionChunks.map(c => `${c.chunkX},${c.chunkZ}`));
+                const skippedChunks = new Set(dimensionSkipped.map(c => `${c.chunkX},${c.chunkZ}`));
                 
                 let html = '';
                 for (let z = minZ; z <= maxZ; z++) {
                   for (let x = minX; x <= maxX; x++) {
-                    const isScanned = dimensionChunks.some(c => c.chunkX === x && c.chunkZ === z);
-                    const isSkipped = dimensionSkipped.some(c => c.chunkX === x && c.chunkZ === z);
+                    const key = `${x},${z}`;
+                    const isScanned = scannedChunks.has(key);
+                    const isSkipped = skippedChunks.has(key);
                     const isPlayer = playerData.dimension === currentDimension && 
                       playerData.chunkX === x && playerData.chunkZ === z;
                     let className = 'chunk-cell';
@@ -2185,11 +2296,19 @@ public class WebServer {
                   }
                 }
               }
+
+              function startPolling() {
+                const tick = async () => {
+                  await fetchData();
+                  const delayMs = document.hidden ? 12000 : 3000;
+                  window.setTimeout(tick, delayMs);
+                };
+                tick();
+              }
               
               setupConfigListeners();
-              fetchData();
               fetchConfig();
-              setInterval(fetchData, 3000);
+              startPolling();
             }
             """;
     }
