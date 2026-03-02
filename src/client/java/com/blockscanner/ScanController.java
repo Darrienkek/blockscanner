@@ -402,7 +402,7 @@ public class ScanController {
         int totalChunks = blockScanner.getDataStore().getScannedChunks().size();
         int currentX = client.player.getBlockX();
         int currentZ = client.player.getBlockZ();
-        String message = "I've scanned total " + totalChunks + ", I'm currently at " + currentX + "," + currentZ + ".";
+        String message = "I've scanned total " + totalChunks + "chunks, I'm currently at " + currentX + "," + currentZ + ".";
         if (sendServerChatMessage(message)) {
             lastProgressAnnouncementAt = now;
         }
