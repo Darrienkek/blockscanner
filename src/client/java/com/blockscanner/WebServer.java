@@ -352,6 +352,13 @@ public class WebServer {
         List<String> announceBlocks = null;
         Boolean rescanScannedChunks = null;
         Boolean scanSigns = null;
+        Integer chunksPerTick = null;
+        Integer batchRadius = null;
+        Boolean scanBlocksEnabled = null;
+        Boolean scanEntitiesEnabled = null;
+        Integer startChunkX = null;
+        Integer startChunkZ = null;
+        String startDimension = null;
         if (payload != null && payload.has("targetBlocks")) {
             targetBlocks = toStringList(payload.get("targetBlocks"));
         }
@@ -364,8 +371,62 @@ public class WebServer {
         if (payload != null && payload.has("scanSigns")) {
             scanSigns = toBoolean(payload.get("scanSigns"));
         }
+        if (payload != null && payload.has("chunksPerTick")) {
+            chunksPerTick = toInteger(payload.get("chunksPerTick"));
+        }
+        if (payload != null && payload.has("batchRadius")) {
+            batchRadius = toInteger(payload.get("batchRadius"));
+        }
+        if (payload != null && payload.has("scanBlocksEnabled")) {
+            scanBlocksEnabled = toBoolean(payload.get("scanBlocksEnabled"));
+        }
+        if (payload != null && payload.has("scanEntitiesEnabled")) {
+            scanEntitiesEnabled = toBoolean(payload.get("scanEntitiesEnabled"));
+        }
+        if (payload != null && payload.has("startChunkX")) {
+            startChunkX = toInteger(payload.get("startChunkX"));
+        }
+        if (payload != null && payload.has("startChunkZ")) {
+            startChunkZ = toInteger(payload.get("startChunkZ"));
+        }
+        if (payload != null && payload.has("startDimension")) {
+            startDimension = toStringValue(payload.get("startDimension"));
+        }
 
-        String error = scanController.updateConfig(targetBlocks, announceBlocks, rescanScannedChunks, scanSigns);
+        if (startChunkX != null || startChunkZ != null || (startDimension != null && !startDimension.isBlank())) {
+            if (startChunkX == null || startChunkZ == null) {
+                Map<String, Object> response = buildConfigResponse();
+                response.put("error", "startChunkX and startChunkZ must both be provided");
+                String json = gson.toJson(response);
+                addCorsHeaders(exchange);
+                sendResponse(exchange, 400, "application/json", json);
+                return;
+            }
+
+            String dimensionToUse = (startDimension != null && !startDimension.isBlank())
+                ? startDimension
+                : resolveCurrentDimension();
+            String startError = scanController.setTraversalStart(dimensionToUse, startChunkX, startChunkZ);
+            if (startError != null) {
+                Map<String, Object> response = buildConfigResponse();
+                response.put("error", startError);
+                String json = gson.toJson(response);
+                addCorsHeaders(exchange);
+                sendResponse(exchange, 400, "application/json", json);
+                return;
+            }
+        }
+
+        String error = scanController.updateConfig(
+            targetBlocks,
+            announceBlocks,
+            rescanScannedChunks,
+            scanSigns,
+            chunksPerTick,
+            batchRadius,
+            scanBlocksEnabled,
+            scanEntitiesEnabled
+        );
         if (error != null) {
             Map<String, Object> response = buildConfigResponse();
             response.put("error", error);
@@ -473,6 +534,27 @@ public class WebServer {
         return null;
     }
 
+    private Integer toInteger(com.google.gson.JsonElement value) {
+        if (value == null || value.isJsonNull()) {
+            return null;
+        }
+        if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()) {
+            return value.getAsInt();
+        }
+        return null;
+    }
+
+    private String toStringValue(com.google.gson.JsonElement value) {
+        if (value == null || value.isJsonNull()) {
+            return null;
+        }
+        if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+            String text = value.getAsString();
+            return text != null ? text.trim() : null;
+        }
+        return null;
+    }
+
     private Map<String, String> parseQueryParams(HttpExchange exchange) {
         Map<String, String> queryParams = new HashMap<>();
         String rawQuery = exchange.getRequestURI() != null ? exchange.getRequestURI().getRawQuery() : null;
@@ -535,7 +617,31 @@ public class WebServer {
         config.put("announceBlocks", scanController.getAnnounceBlocks());
         config.put("rescanScannedChunks", scanController.isRescanScannedChunks());
         config.put("scanSigns", scanController.isScanSigns());
+        config.put("chunksPerTick", scanController.getChunksPerTick());
+        config.put("batchRadius", scanController.getBatchRadius());
+        config.put("scanBlocksEnabled", scanController.isScanBlocksEnabled());
+        config.put("scanEntitiesEnabled", scanController.isScanEntitiesEnabled());
+        config.put("chunksPerTickMin", ScanController.getMinChunksPerTick());
+        config.put("chunksPerTickMax", ScanController.getMaxChunksPerTick());
+        config.put("batchRadiusMin", ScanController.getMinBatchRadius());
+        config.put("batchRadiusMax", ScanController.getMaxBatchRadius());
         return config;
+    }
+
+    private String resolveCurrentDimension() {
+        String dimension = dataStore.getCurrentDimension();
+        if (dimension != null && !dimension.isBlank()) {
+            return dimension;
+        }
+
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client != null && client.world != null) {
+            String worldDimension = client.world.getRegistryKey().getValue().toString();
+            if (worldDimension != null && !worldDimension.isBlank()) {
+                return worldDimension;
+            }
+        }
+        return "minecraft:overworld";
     }
 
     /**
@@ -917,11 +1023,40 @@ public class WebServer {
                             <textarea id="announce-blocks" class="config-input" placeholder="minecraft:beacon&#10;minecraft:spawner"></textarea>
                             <div class="config-note">Only blocks listed here are announced to server chat. Leave empty to disable announcements.</div>
                             <div class="config-warning" id="block-warning"></div>
+                            <div class="config-warning">Warning: applying these changes while running is very buggy.</div>
                             <div class="config-row">
                                 <label for="rescan-toggle">Rescan already scanned chunks</label>
                                 <input id="rescan-toggle" type="checkbox" />
                             </div>
                             <div class="config-note">Enable this if the world changes and you want to scan previously scanned chunks again.</div>
+                            <div class="config-row">
+                                <label for="blocks-toggle">Enable block scanning</label>
+                                <input id="blocks-toggle" type="checkbox" />
+                            </div>
+                            <div class="config-row">
+                                <label for="entities-toggle">Enable entity scanning</label>
+                                <input id="entities-toggle" type="checkbox" />
+                            </div>
+                            <div class="config-row">
+                                <label for="chunks-per-tick">Chunks per tick (per enabled scanner)</label>
+                                <input id="chunks-per-tick" type="number" min="1" max="16" step="1" value="2" />
+                            </div>
+                            <div class="config-note">Higher values scan faster but can increase client lag.</div>
+                            <div class="config-row">
+                                <label for="batch-radius">Batch radius (1=3x3, 2=5x5, 3=7x7)</label>
+                                <input id="batch-radius" type="number" min="1" max="6" step="1" value="3" />
+                            </div>
+                            <div class="config-note">Player stays on the middle chunk while scanning the configured batch window.</div>
+                            <div class="config-row">
+                                <label for="start-chunk-x">Traversal start chunk (center)</label>
+                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                    <input id="start-chunk-x" type="number" step="1" placeholder="chunkX" style="width: 110px;" />
+                                    <input id="start-chunk-z" type="number" step="1" placeholder="chunkZ" style="width: 110px;" />
+                                    <button class="config-save" id="start-use-player" type="button">Use Player</button>
+                                    <button class="config-save" id="start-apply" type="button">Apply Start</button>
+                                </div>
+                            </div>
+                            <div class="config-note">Apply Start resets the spiral cursor for the current dimension and begins from that center chunk.</div>
                             <div class="config-actions">
                                 <button class="config-save" id="config-save" type="button">Save Settings</button>
                                 <div class="config-status" id="config-status"></div>
@@ -1674,7 +1809,11 @@ public class WebServer {
                 const rescanToggle = document.getElementById('rescan-toggle');
                 const signsToggle = document.getElementById('signs-toggle');
                 const signsPanel = document.getElementById('signs-panel');
-             
+                const blocksToggle = document.getElementById('blocks-toggle');
+                const entitiesToggle = document.getElementById('entities-toggle');
+                const chunksPerTickInput = document.getElementById('chunks-per-tick');
+                const batchRadiusInput = document.getElementById('batch-radius');
+              
                 if (targetBlocksInput) {
                   targetBlocksInput.value = formatTargetBlocks(config.targetBlocks);
                 }
@@ -1686,6 +1825,28 @@ public class WebServer {
                 }
                 if (signsToggle) {
                   signsToggle.checked = Boolean(config.scanSigns);
+                }
+                if (blocksToggle) {
+                  blocksToggle.checked = Boolean(config.scanBlocksEnabled ?? true);
+                }
+                if (entitiesToggle) {
+                  entitiesToggle.checked = Boolean(config.scanEntitiesEnabled ?? true);
+                }
+                if (chunksPerTickInput) {
+                  const minChunksPerTick = Number(config.chunksPerTickMin ?? 1);
+                  const maxChunksPerTick = Number(config.chunksPerTickMax ?? 16);
+                  const value = Number(config.chunksPerTick ?? minChunksPerTick);
+                  chunksPerTickInput.min = String(minChunksPerTick);
+                  chunksPerTickInput.max = String(maxChunksPerTick);
+                  chunksPerTickInput.value = String(Number.isFinite(value) ? value : minChunksPerTick);
+                }
+                if (batchRadiusInput) {
+                  const minBatchRadius = Number(config.batchRadiusMin ?? 1);
+                  const maxBatchRadius = Number(config.batchRadiusMax ?? 6);
+                  const value = Number(config.batchRadius ?? minBatchRadius);
+                  batchRadiusInput.min = String(minBatchRadius);
+                  batchRadiusInput.max = String(maxBatchRadius);
+                  batchRadiusInput.value = String(Number.isFinite(value) ? value : minBatchRadius);
                 }
                 if (signsToggle && signsPanel) {
                   signsPanel.classList.toggle('hidden', !signsToggle.checked);
@@ -1713,25 +1874,140 @@ public class WebServer {
                 }
               }
             
-              function validateConfigInputs(targetBlocks) {
-                if (!Array.isArray(targetBlocks) || targetBlocks.length === 0) {
+              function validateConfigInputs(targetBlocks, scanBlocksEnabled, scanEntitiesEnabled, chunksPerTick, batchRadius) {
+                const chunksPerTickMin = Number(configData?.chunksPerTickMin ?? 1);
+                const chunksPerTickMax = Number(configData?.chunksPerTickMax ?? 16);
+                const batchRadiusMin = Number(configData?.batchRadiusMin ?? 1);
+                const batchRadiusMax = Number(configData?.batchRadiusMax ?? 6);
+
+                if (!scanBlocksEnabled && !scanEntitiesEnabled) {
+                  return 'Enable block scanning or entity scanning.';
+                }
+                if (scanBlocksEnabled && (!Array.isArray(targetBlocks) || targetBlocks.length === 0)) {
                   return 'Enter at least one block id.';
+                }
+                if (!Number.isInteger(chunksPerTick) || chunksPerTick < chunksPerTickMin || chunksPerTick > chunksPerTickMax) {
+                  return `Chunks per tick must be between ${chunksPerTickMin} and ${chunksPerTickMax}.`;
+                }
+                if (!Number.isInteger(batchRadius) || batchRadius < batchRadiusMin || batchRadius > batchRadiusMax) {
+                  return `Batch radius must be between ${batchRadiusMin} and ${batchRadiusMax}.`;
                 }
                 return null;
               }
-            
+
+              function parseOptionalIntegerInput(id) {
+                const input = document.getElementById(id);
+                if (!input) {
+                  return null;
+                }
+                const raw = (input.value ?? '').trim();
+                if (!raw) {
+                  return null;
+                }
+                const value = Number.parseInt(raw, 10);
+                return Number.isInteger(value) ? value : null;
+              }
+
+              function setStartInputsFromPlayer() {
+                const xInput = document.getElementById('start-chunk-x');
+                const zInput = document.getElementById('start-chunk-z');
+                if (!xInput || !zInput) {
+                  return;
+                }
+                const chunkX = Number(playerData?.chunkX);
+                const chunkZ = Number(playerData?.chunkZ);
+                if (!Number.isInteger(chunkX) || !Number.isInteger(chunkZ)) {
+                  return;
+                }
+                xInput.value = String(chunkX);
+                zInput.value = String(chunkZ);
+              }
+
+              async function applyTraversalStart() {
+                const statusEl = document.getElementById('config-status');
+                const startChunkX = parseOptionalIntegerInput('start-chunk-x');
+                const startChunkZ = parseOptionalIntegerInput('start-chunk-z');
+                if (Boolean(statusData?.scanning)) {
+                  const proceed = window.confirm('Applying these changes while running is very buggy. Continue?');
+                  if (!proceed) {
+                    return;
+                  }
+                }
+                if (!Number.isInteger(startChunkX) || !Number.isInteger(startChunkZ)) {
+                  if (statusEl) {
+                    statusEl.textContent = 'Enter valid start chunk X and Z';
+                  }
+                  return;
+                }
+
+                if (statusEl) {
+                  statusEl.textContent = 'Applying start...';
+                }
+
+                try {
+                  const response = await fetch(apiUrl('/api/config'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      startChunkX: startChunkX,
+                      startChunkZ: startChunkZ,
+                      startDimension: currentDimension
+                    })
+                  });
+
+                  const payload = await response.json();
+                  if (!response.ok) {
+                    if (statusEl) {
+                      statusEl.textContent = payload?.error || 'Failed to apply start';
+                    }
+                    return;
+                  }
+
+                  configData = payload;
+                  updateConfigForm(configData);
+                  if (statusEl) {
+                    statusEl.textContent = 'Start applied';
+                  }
+                  await fetchData();
+                } catch (error) {
+                  console.error('Error applying traversal start:', error);
+                  if (statusEl) {
+                    statusEl.textContent = 'Failed to apply start';
+                  }
+                }
+              }
+             
               async function saveConfig() {
                 const statusEl = document.getElementById('config-status');
                 if (statusEl) {
                   statusEl.textContent = 'Saving...';
                 }
-             
+                if (Boolean(statusData?.scanning)) {
+                  const proceed = window.confirm('Applying these changes while running is very buggy. Continue?');
+                  if (!proceed) {
+                    if (statusEl) {
+                      statusEl.textContent = 'Save cancelled';
+                    }
+                    return;
+                  }
+                }
+              
                 const targetBlocks = parseTargetBlocks(document.getElementById('target-blocks')?.value);
                 const announceBlocks = parseTargetBlocks(document.getElementById('announce-blocks')?.value);
                 const rescanScannedChunks = Boolean(document.getElementById('rescan-toggle')?.checked);
                 const scanSigns = Boolean(document.getElementById('signs-toggle')?.checked);
-             
-                const validationError = validateConfigInputs(targetBlocks);
+                const scanBlocksEnabled = Boolean(document.getElementById('blocks-toggle')?.checked);
+                const scanEntitiesEnabled = Boolean(document.getElementById('entities-toggle')?.checked);
+                const chunksPerTick = Number.parseInt(document.getElementById('chunks-per-tick')?.value ?? '', 10);
+                const batchRadius = Number.parseInt(document.getElementById('batch-radius')?.value ?? '', 10);
+              
+                const validationError = validateConfigInputs(
+                  targetBlocks,
+                  scanBlocksEnabled,
+                  scanEntitiesEnabled,
+                  chunksPerTick,
+                  batchRadius
+                );
                 if (validationError) {
                   if (statusEl) {
                     statusEl.textContent = validationError;
@@ -1750,7 +2026,11 @@ public class WebServer {
                     targetBlocks: targetBlocks,
                     announceBlocks: announceBlocks,
                     rescanScannedChunks: rescanScannedChunks,
-                    scanSigns: scanSigns
+                    scanSigns: scanSigns,
+                    chunksPerTick: chunksPerTick,
+                    batchRadius: batchRadius,
+                    scanBlocksEnabled: scanBlocksEnabled,
+                    scanEntitiesEnabled: scanEntitiesEnabled
                   })
                 });
             
@@ -2169,6 +2449,8 @@ public class WebServer {
                 const signsPanel = document.getElementById('signs-panel');
                 const toggleButton = document.getElementById('toggle-button');
                 const saveButton = document.getElementById('config-save');
+                const startUsePlayerButton = document.getElementById('start-use-player');
+                const startApplyButton = document.getElementById('start-apply');
                 const clearButton = document.getElementById('clear-button');
                 
                 if (targetBlocksInput) {
@@ -2183,6 +2465,12 @@ public class WebServer {
                 }
                 if (saveButton) {
                   saveButton.addEventListener('click', saveConfig);
+                }
+                if (startUsePlayerButton) {
+                  startUsePlayerButton.addEventListener('click', setStartInputsFromPlayer);
+                }
+                if (startApplyButton) {
+                  startApplyButton.addEventListener('click', applyTraversalStart);
                 }
                 if (clearButton) {
                   clearButton.addEventListener('click', confirmClearData);

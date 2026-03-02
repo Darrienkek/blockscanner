@@ -28,12 +28,19 @@ public final class SpiralTraversal {
     }
 
     public static ChunkCoordinate currentCenterChunk(SpiralCursorState state) {
+        return currentCenterChunk(state, WAYPOINT_STEP);
+    }
+
+    public static ChunkCoordinate currentCenterChunk(SpiralCursorState state, int waypointStep) {
         if (state == null) {
             throw new IllegalArgumentException("state cannot be null");
         }
+        if (waypointStep <= 0) {
+            throw new IllegalArgumentException("waypointStep must be greater than 0");
+        }
         return new ChunkCoordinate(
-            state.waypointGridX() * WAYPOINT_STEP,
-            state.waypointGridZ() * WAYPOINT_STEP
+            state.waypointGridX() * waypointStep,
+            state.waypointGridZ() * waypointStep
         );
     }
 
@@ -73,13 +80,33 @@ public final class SpiralTraversal {
     }
 
     public static List<ChunkCoordinate> enumerateBatchChunks(int centerChunkX, int centerChunkZ) {
-        List<ChunkCoordinate> chunks = new ArrayList<>(BATCH_TOTAL);
-        for (int x = centerChunkX - BATCH_RADIUS; x <= centerChunkX + BATCH_RADIUS; x++) {
-            for (int z = centerChunkZ - BATCH_RADIUS; z <= centerChunkZ + BATCH_RADIUS; z++) {
+        return enumerateBatchChunks(centerChunkX, centerChunkZ, BATCH_RADIUS);
+    }
+
+    public static List<ChunkCoordinate> enumerateBatchChunks(int centerChunkX, int centerChunkZ, int radius) {
+        if (radius < 0) {
+            throw new IllegalArgumentException("radius cannot be negative");
+        }
+        int total = batchTotalFromRadius(radius);
+        List<ChunkCoordinate> chunks = new ArrayList<>(total);
+        for (int x = centerChunkX - radius; x <= centerChunkX + radius; x++) {
+            for (int z = centerChunkZ - radius; z <= centerChunkZ + radius; z++) {
                 chunks.add(new ChunkCoordinate(x, z));
             }
         }
         return chunks;
+    }
+
+    public static int batchSideFromRadius(int radius) {
+        if (radius < 0) {
+            throw new IllegalArgumentException("radius cannot be negative");
+        }
+        return (radius * 2) + 1;
+    }
+
+    public static int batchTotalFromRadius(int radius) {
+        int side = batchSideFromRadius(radius);
+        return side * side;
     }
 
     public static String directionName(int directionIndex) {

@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -22,7 +23,12 @@ public class ScanController {
     private final EntityScanner entityScanner;
     private static KeyBinding toggleKey;
 
-    private static final int MAX_CHUNKS_PER_TICK = 2;
+    private static final int DEFAULT_CHUNKS_PER_TICK = 2;
+    private static final int MIN_CHUNKS_PER_TICK = 1;
+    private static final int MAX_CHUNKS_PER_TICK = 16;
+    private static final int DEFAULT_BATCH_RADIUS = SpiralTraversal.BATCH_RADIUS;
+    private static final int MIN_BATCH_RADIUS = 1;
+    private static final int MAX_BATCH_RADIUS = 6;
     private static final long SPECTATOR_WARNING_INTERVAL_MS = 5_000L;
     private static final long PROGRESS_ANNOUNCEMENT_INTERVAL_MS = 10 * 60 * 1000L;
     private static final double WAYPOINT_ARRIVAL_DISTANCE = 1.25D;
@@ -47,6 +53,10 @@ public class ScanController {
     private List<String> announceBlocks = new ArrayList<>(DEFAULT_ANNOUNCE_BLOCKS);
     private boolean rescanScannedChunks = false;
     private boolean scanSigns = false;
+    private int chunksPerTick = DEFAULT_CHUNKS_PER_TICK;
+    private int batchRadius = DEFAULT_BATCH_RADIUS;
+    private boolean scanBlocksEnabled = true;
+    private boolean scanEntitiesEnabled = true;
 
     private String lastTraversalDimension;
     private long lastSpectatorWarningAt;
@@ -140,7 +150,7 @@ public class ScanController {
         }
 
         SpiralCursorState cursor = blockScanner.getDataStore().getOrCreateTraversalState(currentDimension);
-        SpiralTraversal.ChunkCoordinate centerChunk = SpiralTraversal.currentCenterChunk(cursor);
+        SpiralTraversal.ChunkCoordinate centerChunk = SpiralTraversal.currentCenterChunk(cursor, currentWaypointStep());
 
         if (!client.player.isSpectator()) {
             waitingForSpectator = true;
@@ -154,30 +164,34 @@ public class ScanController {
         waitingForSpectator = false;
         movePlayerTowardWaypoint(client, centerChunk.chunkX(), centerChunk.chunkZ());
 
-        blockScanner.queueChunksInWindow(
-            client.world,
-            centerChunk.chunkX(),
-            centerChunk.chunkZ(),
-            SpiralTraversal.BATCH_RADIUS
-        );
-
-        entityScanner.queueChunksInWindow(
+        if (scanBlocksEnabled) {
+            blockScanner.queueChunksInWindow(
                 client.world,
                 centerChunk.chunkX(),
                 centerChunk.chunkZ(),
-                SpiralTraversal.BATCH_RADIUS
-        );
-        blockScanner.processScanQueue(client.world, MAX_CHUNKS_PER_TICK);
-        entityScanner.processScanQueue(client.world, MAX_CHUNKS_PER_TICK);
+                batchRadius
+            );
+            blockScanner.processScanQueue(client.world, chunksPerTick);
+        }
+
+        if (scanEntitiesEnabled) {
+            entityScanner.queueChunksInWindow(
+                    client.world,
+                    centerChunk.chunkX(),
+                    centerChunk.chunkZ(),
+                    batchRadius
+            );
+            entityScanner.processScanQueue(client.world, chunksPerTick);
+        }
 
         int batchChunksScanned = countBatchScanned(currentDimension, centerChunk.chunkX(), centerChunk.chunkZ());
-        if (isBatchComplete(batchChunksScanned)) {
+        if (isBatchComplete(batchChunksScanned, currentBatchTotal())) {
             SpiralCursorState nextCursor = SpiralTraversal.advance(cursor);
             blockScanner.getDataStore().updateTraversalState(currentDimension, nextCursor);
             entityScanner.getDataStore().updateTraversalState(currentDimension, nextCursor);
             blockScanner.clearQueueOnly();
             entityScanner.clearQueueOnly();
-            SpiralTraversal.ChunkCoordinate nextCenter = SpiralTraversal.currentCenterChunk(nextCursor);
+            SpiralTraversal.ChunkCoordinate nextCenter = SpiralTraversal.currentCenterChunk(nextCursor, currentWaypointStep());
             updateTraversalStatus(currentDimension, nextCursor, nextCenter, 0);
             return;
         }
@@ -204,7 +218,16 @@ public class ScanController {
     }
 
     public synchronized ScanConfig getConfigSnapshot() {
-        return new ScanConfig(List.copyOf(targetBlocks), List.copyOf(announceBlocks), rescanScannedChunks, scanSigns);
+        return new ScanConfig(
+            List.copyOf(targetBlocks),
+            List.copyOf(announceBlocks),
+            rescanScannedChunks,
+            scanSigns,
+            chunksPerTick,
+            batchRadius,
+            scanBlocksEnabled,
+            scanEntitiesEnabled
+        );
     }
 
     public synchronized List<String> getTargetBlocks() {
@@ -223,12 +246,61 @@ public class ScanController {
         return scanSigns;
     }
 
+    public synchronized int getChunksPerTick() {
+        return chunksPerTick;
+    }
+
+    public synchronized int getBatchRadius() {
+        return batchRadius;
+    }
+
+    public synchronized boolean isScanBlocksEnabled() {
+        return scanBlocksEnabled;
+    }
+
+    public synchronized boolean isScanEntitiesEnabled() {
+        return scanEntitiesEnabled;
+    }
+
+    public static int getMinChunksPerTick() {
+        return MIN_CHUNKS_PER_TICK;
+    }
+
+    public static int getMaxChunksPerTick() {
+        return MAX_CHUNKS_PER_TICK;
+    }
+
+    public static int getMinBatchRadius() {
+        return MIN_BATCH_RADIUS;
+    }
+
+    public static int getMaxBatchRadius() {
+        return MAX_BATCH_RADIUS;
+    }
+
     public synchronized String updateConfig(
         List<String> targetBlocks,
         List<String> announceBlocks,
         Boolean rescanScannedChunks,
-        Boolean scanSigns
+        Boolean scanSigns,
+        Integer chunksPerTick,
+        Integer batchRadius,
+        Boolean scanBlocksEnabled,
+        Boolean scanEntitiesEnabled
     ) {
+        boolean nextScanBlocksEnabled = scanBlocksEnabled != null ? scanBlocksEnabled : this.scanBlocksEnabled;
+        boolean nextScanEntitiesEnabled = scanEntitiesEnabled != null ? scanEntitiesEnabled : this.scanEntitiesEnabled;
+        if (!nextScanBlocksEnabled && !nextScanEntitiesEnabled) {
+            return "At least one scanner must remain enabled";
+        }
+
+        if (chunksPerTick != null && (chunksPerTick < MIN_CHUNKS_PER_TICK || chunksPerTick > MAX_CHUNKS_PER_TICK)) {
+            return "chunksPerTick must be between " + MIN_CHUNKS_PER_TICK + " and " + MAX_CHUNKS_PER_TICK;
+        }
+        if (batchRadius != null && (batchRadius < MIN_BATCH_RADIUS || batchRadius > MAX_BATCH_RADIUS)) {
+            return "batchRadius must be between " + MIN_BATCH_RADIUS + " and " + MAX_BATCH_RADIUS;
+        }
+
         if (targetBlocks != null) {
             List<String> normalized = normalizeBlockIds(targetBlocks);
             if (normalized.isEmpty()) {
@@ -261,6 +333,32 @@ public class ScanController {
             blockScanner.setScanSigns(scanSigns);
         }
 
+        if (scanBlocksEnabled != null) {
+            this.scanBlocksEnabled = scanBlocksEnabled;
+            if (!scanBlocksEnabled) {
+                blockScanner.clearQueueOnly();
+            }
+        }
+
+        if (scanEntitiesEnabled != null) {
+            this.scanEntitiesEnabled = scanEntitiesEnabled;
+            if (!scanEntitiesEnabled) {
+                entityScanner.clearQueueOnly();
+            }
+        }
+
+        if (chunksPerTick != null) {
+            this.chunksPerTick = chunksPerTick;
+        }
+
+        if (batchRadius != null) {
+            int previousWaypointStep = currentWaypointStep();
+            this.batchRadius = batchRadius;
+            remapTraversalStatesForWaypointStepChange(previousWaypointStep, currentWaypointStep());
+            blockScanner.clearQueueOnly();
+            entityScanner.clearQueueOnly();
+        }
+
         return null;
     }
 
@@ -269,12 +367,41 @@ public class ScanController {
         entityScanner.clearAllData();
     }
 
+    public synchronized String setTraversalStart(String dimension, int centerChunkX, int centerChunkZ) {
+        if (dimension == null || dimension.isBlank()) {
+            return "dimension is required";
+        }
+
+        int step = currentWaypointStep();
+        int gridX = (int) Math.round((double) centerChunkX / step);
+        int gridZ = (int) Math.round((double) centerChunkZ / step);
+
+        SpiralCursorState resetState = new SpiralCursorState(
+            gridX,
+            gridZ,
+            0,
+            1,
+            0,
+            0,
+            0
+        );
+
+        blockScanner.getDataStore().updateTraversalState(dimension, resetState);
+        entityScanner.getDataStore().updateTraversalState(dimension, resetState);
+        blockScanner.clearQueueOnly();
+        entityScanner.clearQueueOnly();
+
+        SpiralTraversal.ChunkCoordinate center = SpiralTraversal.currentCenterChunk(resetState, step);
+        updateTraversalStatus(dimension, resetState, center, 0);
+        return null;
+    }
+
     public TraversalStatus getTraversalStatusSnapshot() {
         return new TraversalStatus(
             scanningActive,
             waitingForSpectator,
-            SpiralTraversal.BATCH_SIDE,
-            SpiralTraversal.BATCH_TOTAL,
+            currentBatchSide(),
+            currentBatchTotal(),
             traversalDimension,
             traversalWaypointGridX,
             traversalWaypointGridZ,
@@ -315,12 +442,12 @@ public class ScanController {
         traversalCenterChunkZ = center.chunkZ();
         traversalDirection = SpiralTraversal.directionName(cursor.directionIndex());
         traversalWaypointsCompleted = cursor.waypointsCompleted();
-        traversalBatchChunksScanned = Math.max(0, Math.min(batchChunksScanned, SpiralTraversal.BATCH_TOTAL));
+        traversalBatchChunksScanned = Math.max(0, Math.min(batchChunksScanned, currentBatchTotal()));
     }
 
     private int countBatchScanned(String dimension, int centerChunkX, int centerChunkZ) {
         int scanned = 0;
-        for (SpiralTraversal.ChunkCoordinate chunk : SpiralTraversal.enumerateBatchChunks(centerChunkX, centerChunkZ)) {
+        for (SpiralTraversal.ChunkCoordinate chunk : SpiralTraversal.enumerateBatchChunks(centerChunkX, centerChunkZ, batchRadius)) {
             if (blockScanner.getDataStore().isChunkScanned(chunk.chunkX(), chunk.chunkZ(), dimension)) {
                 scanned++;
             }
@@ -382,9 +509,12 @@ public class ScanController {
         client.options.sprintKey.setPressed(false);
     }
 
-
     static boolean isBatchComplete(int scannedChunks) {
         return scannedChunks >= SpiralTraversal.BATCH_TOTAL;
+    }
+
+    static boolean isBatchComplete(int scannedChunks, int batchTotal) {
+        return scannedChunks >= batchTotal;
     }
 
     static boolean shouldWarnSpectator(long now, long lastWarningAt, long intervalMs) {
@@ -403,7 +533,7 @@ public class ScanController {
         int totalChunks = blockScanner.getDataStore().getScannedChunks().size();
         int currentX = client.player.getBlockX();
         int currentZ = client.player.getBlockZ();
-        String message = "I've scanned total " + totalChunks + "chunks, I'm currently at " + currentX + "," + currentZ + ".";
+        String message = "I've scanned total " + totalChunks + " chunks, I'm currently at " + currentX + "," + currentZ + ".";
         if (sendServerChatMessage(message)) {
             lastProgressAnnouncementAt = now;
         }
@@ -420,6 +550,49 @@ public class ScanController {
 
         client.getNetworkHandler().sendChatMessage(message);
         return true;
+    }
+
+    private int currentBatchSide() {
+        return SpiralTraversal.batchSideFromRadius(batchRadius);
+    }
+
+    private int currentBatchTotal() {
+        return SpiralTraversal.batchTotalFromRadius(batchRadius);
+    }
+
+    private int currentWaypointStep() {
+        return currentBatchSide();
+    }
+
+    private void remapTraversalStatesForWaypointStepChange(int previousWaypointStep, int nextWaypointStep) {
+        if (previousWaypointStep <= 0 || nextWaypointStep <= 0 || previousWaypointStep == nextWaypointStep) {
+            return;
+        }
+
+        for (Map.Entry<String, SpiralCursorState> entry : blockScanner.getDataStore().getTraversalStates().entrySet()) {
+            String dimension = entry.getKey();
+            SpiralCursorState cursor = entry.getValue();
+            if (dimension == null || cursor == null) {
+                continue;
+            }
+
+            SpiralTraversal.ChunkCoordinate previousCenter = SpiralTraversal.currentCenterChunk(cursor, previousWaypointStep);
+            int remappedGridX = (int) Math.round((double) previousCenter.chunkX() / nextWaypointStep);
+            int remappedGridZ = (int) Math.round((double) previousCenter.chunkZ() / nextWaypointStep);
+
+            SpiralCursorState remappedCursor = new SpiralCursorState(
+                remappedGridX,
+                remappedGridZ,
+                cursor.directionIndex(),
+                cursor.legLength(),
+                cursor.stepsTakenOnLeg(),
+                cursor.legsCompletedAtLength(),
+                cursor.waypointsCompleted()
+            );
+
+            blockScanner.getDataStore().updateTraversalState(dimension, remappedCursor);
+            entityScanner.getDataStore().updateTraversalState(dimension, remappedCursor);
+        }
     }
 
     private List<String> normalizeBlockIds(List<String> rawBlockIds) {

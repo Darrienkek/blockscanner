@@ -49,7 +49,11 @@ public class BlockScannerMod implements ClientModInitializer {
                     config.targetBlocks(),
                     config.announceBlocks(),
                     config.rescanScannedChunks(),
-                    config.scanSigns()
+                    config.scanSigns(),
+                    config.chunksPerTick(),
+                    config.batchRadius(),
+                    config.scanBlocksEnabled(),
+                    config.scanEntitiesEnabled()
                 );
                 if (error != null) {
                     LOGGER.warn("Invalid saved config ignored: {}", error);
