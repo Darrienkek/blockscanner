@@ -214,12 +214,9 @@ public class BlockScanner {
 
         Chunk chunk = world.getChunkManager().getChunk(pos.x, pos.z, ChunkStatus.FULL, false);
         if (chunk == null) {
-            BlockScannerMod.LOGGER.info("Skipping chunk {} (not loaded yet)", pos);
             dataStore.markChunkSkipped(pos.x, pos.z, dimension);
             return;
         }
-
-        int blocksFound = 0;
 
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
@@ -241,15 +238,6 @@ public class BlockScanner {
                         );
 
                         dataStore.addFoundBlock(result);
-                        blocksFound++;
-                        BlockScannerMod.LOGGER.info(
-                            "Found {} at {}, {}, {} in {}",
-                            blockType,
-                            blockPos.getX(),
-                            blockPos.getY(),
-                            blockPos.getZ(),
-                            dimension
-                        );
                         sendFoundBlockMessage(blockType, blockPos);
                         queueBlockAnnouncement(blockType, blockPos, dimension);
                     }
@@ -258,12 +246,6 @@ public class BlockScanner {
         }
 
         dataStore.markChunkScanned(pos.x, pos.z, dimension);
-        BlockScannerMod.LOGGER.info(
-            "Finished scanning chunk {}, found {} target blocks. Total chunks scanned: {}",
-            pos,
-            blocksFound,
-            dataStore.getScannedChunks().size()
-        );
     }
 
     /**
