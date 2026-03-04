@@ -13,6 +13,7 @@ import java.util.List;
  * @param batchRadius chunk radius around each waypoint (1=3x3, 2=5x5, 3=7x7)
  * @param scanBlocksEnabled whether block scanning is enabled
  * @param scanEntitiesEnabled whether entity scanning is enabled
+ * @param manualScanEnabled whether scanning should stay centered on the player's current chunk
  */
 public record ScanConfig(
     List<String> targetBlocks,
@@ -22,6 +23,7 @@ public record ScanConfig(
     Integer chunksPerTick,
     Integer batchRadius,
     Boolean scanBlocksEnabled,
-    Boolean scanEntitiesEnabled
+    Boolean scanEntitiesEnabled,
+    Boolean manualScanEnabled
 ) {
 }

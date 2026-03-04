@@ -33,6 +33,7 @@ public class ScanController {
     private static final long SPECTATOR_WARNING_INTERVAL_MS = 5_000L;
     private static final long PROGRESS_ANNOUNCEMENT_INTERVAL_MS = 10 * 60 * 1000L;
     private static final double WAYPOINT_ARRIVAL_DISTANCE = 1.25D;
+    private static final double NAVIGATION_ARRIVAL_DISTANCE = 1.25D;
     private static final List<String> DEFAULT_TARGET_BLOCKS = List.of(
         "minecraft:barrier",
         "minecraft:command_block",
@@ -58,6 +59,7 @@ public class ScanController {
     private int batchRadius = DEFAULT_BATCH_RADIUS;
     private boolean scanBlocksEnabled = true;
     private boolean scanEntitiesEnabled = true;
+    private boolean manualScanEnabled = false;
 
     private String lastTraversalDimension;
     private long lastSpectatorWarningAt;
@@ -72,6 +74,12 @@ public class ScanController {
     private volatile String traversalDirection = "+X";
     private volatile long traversalWaypointsCompleted;
     private volatile int traversalBatchChunksScanned;
+    private volatile boolean navigationActive;
+    private volatile boolean navigationUsesChunkTarget;
+    private volatile int navigationTargetChunkX;
+    private volatile int navigationTargetChunkZ;
+    private volatile int navigationTargetBlockX;
+    private volatile int navigationTargetBlockZ;
 
     public ScanController(BlockScanner blockScanner, EntityScanner entityScanner) {
         this.blockScanner = blockScanner;
@@ -101,6 +109,7 @@ public class ScanController {
             releaseMovementKeys(client);
             lastProgressAnnouncementAt = 0L;
         } else {
+            navigationActive = false;
             lastProgressAnnouncementAt = System.currentTimeMillis();
             sendServerChatMessage("Auto scan started");
         }
@@ -130,9 +139,21 @@ public class ScanController {
      * @param client The Minecraft client instance
      */
     public void onClientTick(MinecraftClient client) {
-        if (!scanningActive || client.world == null || client.player == null) {
+        if (client.world == null || client.player == null) {
             waitingForSpectator = false;
             releaseMovementKeys(client);
+            return;
+        }
+
+        if (navigationActive) {
+            processManualNavigation(client);
+        }
+
+        if (!scanningActive) {
+            waitingForSpectator = false;
+            if (!navigationActive) {
+                releaseMovementKeys(client);
+            }
             return;
         }
 
@@ -148,6 +169,29 @@ public class ScanController {
             blockScanner.clearQueueOnly();
             entityScanner.clearQueueOnly();
             lastTraversalDimension = currentDimension;
+        }
+
+        if (manualScanEnabled) {
+            waitingForSpectator = false;
+            releaseMovementKeys(client);
+
+            int centerChunkX = client.player.getChunkPos().x;
+            int centerChunkZ = client.player.getChunkPos().z;
+
+            if (scanBlocksEnabled) {
+                blockScanner.queueChunksInWindow(client.world, centerChunkX, centerChunkZ, batchRadius);
+                blockScanner.processScanQueue(client.world, chunksPerTick);
+            }
+
+            if (scanEntitiesEnabled) {
+                entityScanner.queueChunksInWindow(client.world, centerChunkX, centerChunkZ, batchRadius);
+                entityScanner.processScanQueue(client.world, chunksPerTick);
+            }
+
+            SpiralCursorState cursor = blockScanner.getDataStore().getOrCreateTraversalState(currentDimension);
+            int batchChunksScanned = countBatchScanned(currentDimension, centerChunkX, centerChunkZ);
+            updateManualTraversalStatus(currentDimension, centerChunkX, centerChunkZ, cursor.waypointsCompleted(), batchChunksScanned);
+            return;
         }
 
         SpiralCursorState cursor = blockScanner.getDataStore().getOrCreateTraversalState(currentDimension);
@@ -227,7 +271,8 @@ public class ScanController {
             chunksPerTick,
             batchRadius,
             scanBlocksEnabled,
-            scanEntitiesEnabled
+            scanEntitiesEnabled,
+            manualScanEnabled
         );
     }
 
@@ -263,6 +308,10 @@ public class ScanController {
         return scanEntitiesEnabled;
     }
 
+    public synchronized boolean isManualScanEnabled() {
+        return manualScanEnabled;
+    }
+
     public static int getMinChunksPerTick() {
         return MIN_CHUNKS_PER_TICK;
     }
@@ -287,7 +336,8 @@ public class ScanController {
         Integer chunksPerTick,
         Integer batchRadius,
         Boolean scanBlocksEnabled,
-        Boolean scanEntitiesEnabled
+        Boolean scanEntitiesEnabled,
+        Boolean manualScanEnabled
     ) {
         boolean nextScanBlocksEnabled = scanBlocksEnabled != null ? scanBlocksEnabled : this.scanBlocksEnabled;
         boolean nextScanEntitiesEnabled = scanEntitiesEnabled != null ? scanEntitiesEnabled : this.scanEntitiesEnabled;
@@ -352,6 +402,13 @@ public class ScanController {
             }
         }
 
+        if (manualScanEnabled != null) {
+            this.manualScanEnabled = manualScanEnabled;
+            waitingForSpectator = false;
+            blockScanner.clearQueueOnly();
+            entityScanner.clearQueueOnly();
+        }
+
         if (chunksPerTick != null) {
             this.chunksPerTick = chunksPerTick;
         }
@@ -401,10 +458,64 @@ public class ScanController {
         return null;
     }
 
+    public synchronized String navigateToChunk(int chunkX, int chunkZ) {
+        if (scanningActive) {
+            return "Stop scanning before using manual navigation";
+        }
+
+        navigationUsesChunkTarget = true;
+        navigationTargetChunkX = chunkX;
+        navigationTargetChunkZ = chunkZ;
+        navigationTargetBlockX = chunkX * 16 + 8;
+        navigationTargetBlockZ = chunkZ * 16 + 8;
+        navigationActive = true;
+        return null;
+    }
+
+    public synchronized String navigateToBlock(int blockX, int blockZ) {
+        if (scanningActive) {
+            return "Stop scanning before using manual navigation";
+        }
+
+        navigationUsesChunkTarget = false;
+        navigationTargetBlockX = blockX;
+        navigationTargetBlockZ = blockZ;
+        navigationTargetChunkX = Math.floorDiv(blockX, 16);
+        navigationTargetChunkZ = Math.floorDiv(blockZ, 16);
+        navigationActive = true;
+        return null;
+    }
+
+    public synchronized void cancelNavigation() {
+        navigationActive = false;
+    }
+
+    public NavigationStatus getNavigationStatusSnapshot() {
+        return new NavigationStatus(
+            navigationActive,
+            navigationUsesChunkTarget,
+            navigationTargetChunkX,
+            navigationTargetChunkZ,
+            navigationTargetBlockX,
+            navigationTargetBlockZ
+        );
+    }
+
+    public static record NavigationStatus(
+        boolean active,
+        boolean useChunkTarget,
+        int targetChunkX,
+        int targetChunkZ,
+        int targetBlockX,
+        int targetBlockZ
+    ) {
+    }
+
     public TraversalStatus getTraversalStatusSnapshot() {
         return new TraversalStatus(
             scanningActive,
             waitingForSpectator,
+            scanningActive && manualScanEnabled,
             currentBatchSide(),
             currentBatchTotal(),
             traversalDimension,
@@ -421,6 +532,7 @@ public class ScanController {
     public static record TraversalStatus(
         boolean enabled,
         boolean waitingForSpectator,
+        boolean manualMode,
         int batchSideChunks,
         int batchTotalChunks,
         String currentDimension,
@@ -453,6 +565,23 @@ public class ScanController {
         traversalBatchChunksScanned = Math.max(0, Math.min(batchChunksScanned, currentBatchTotal()));
     }
 
+    private void updateManualTraversalStatus(
+        String dimension,
+        int centerChunkX,
+        int centerChunkZ,
+        long waypointsCompleted,
+        int batchChunksScanned
+    ) {
+        traversalDimension = dimension;
+        traversalWaypointGridX = centerChunkX;
+        traversalWaypointGridZ = centerChunkZ;
+        traversalCenterChunkX = centerChunkX;
+        traversalCenterChunkZ = centerChunkZ;
+        traversalDirection = "manual";
+        traversalWaypointsCompleted = waypointsCompleted;
+        traversalBatchChunksScanned = Math.max(0, Math.min(batchChunksScanned, currentBatchTotal()));
+    }
+
     private int countBatchScanned(String dimension, int centerChunkX, int centerChunkZ) {
         int scanned = 0;
         for (SpiralTraversal.ChunkCoordinate chunk : SpiralTraversal.enumerateBatchChunks(centerChunkX, centerChunkZ, batchRadius)) {
@@ -474,20 +603,48 @@ public class ScanController {
         lastSpectatorWarningAt = now;
     }
 
-    private void movePlayerTowardWaypoint(MinecraftClient client, int waypointCenterChunkX, int waypointCenterChunkZ) {
-        if (client == null || client.player == null) {
+    private void processManualNavigation(MinecraftClient client) {
+        if (!navigationActive || client == null || client.player == null) {
             return;
         }
 
+        boolean arrived = movePlayerTowardTarget(
+            client,
+            navigationTargetBlockX + 0.5D,
+            navigationTargetBlockZ + 0.5D,
+            NAVIGATION_ARRIVAL_DISTANCE
+        );
+        if (!arrived) {
+            return;
+        }
+
+        navigationActive = false;
+        releaseMovementKeys(client);
+        if (client.player != null) {
+            String target = navigationUsesChunkTarget
+                ? "chunk " + navigationTargetChunkX + ", " + navigationTargetChunkZ
+                : "block " + navigationTargetBlockX + ", " + navigationTargetBlockZ;
+            client.player.sendMessage(Text.literal("[Block Scanner] Arrived at " + target), false);
+        }
+    }
+
+    private void movePlayerTowardWaypoint(MinecraftClient client, int waypointCenterChunkX, int waypointCenterChunkZ) {
         double targetX = waypointCenterChunkX * 16.0D + 8.5D;
         double targetZ = waypointCenterChunkZ * 16.0D + 8.5D;
+        movePlayerTowardTarget(client, targetX, targetZ, WAYPOINT_ARRIVAL_DISTANCE);
+    }
+
+    private boolean movePlayerTowardTarget(MinecraftClient client, double targetX, double targetZ, double arrivalDistance) {
+        if (client == null || client.player == null) {
+            return false;
+        }
         double deltaX = targetX - client.player.getX();
         double deltaZ = targetZ - client.player.getZ();
         double distanceSquared = (deltaX * deltaX) + (deltaZ * deltaZ);
 
-        if (distanceSquared <= WAYPOINT_ARRIVAL_DISTANCE * WAYPOINT_ARRIVAL_DISTANCE) {
+        if (distanceSquared <= arrivalDistance * arrivalDistance) {
             releaseMovementKeys(client);
-            return;
+            return true;
         }
 
         float yaw = (float) (Math.toDegrees(Math.atan2(deltaZ, deltaX)) - 90.0D);
@@ -501,6 +658,7 @@ public class ScanController {
         client.options.jumpKey.setPressed(false);
         client.options.sneakKey.setPressed(false);
         client.options.sprintKey.setPressed(true);
+        return false;
     }
 
     private void releaseMovementKeys(MinecraftClient client) {
@@ -540,12 +698,10 @@ public class ScanController {
 
         Set<ScannedChunk> scannedChunks = blockScanner.getDataStore().getScannedChunks();
         int totalChunks = scannedChunks.size();
-        ChunkSpan chunkSpan = chunkSpanForDimension(scannedChunks, currentDimension);
         int currentX = client.player.getBlockX();
         int currentZ = client.player.getBlockZ();
-        String message = "I've scanned a total of " + totalChunks + " chunks ("
-            + chunkSpan.spanXChunks() + " x " + chunkSpan.spanZChunks()
-            + " chunks), I'm currently at " + currentX + "," + currentZ + ".";
+        String message = "I've scanned a total of " + totalChunks
+            + " chunks, I'm currently at " + currentX + "," + currentZ + ".";
         if (sendServerChatMessage(message)) {
             lastProgressAnnouncementAt = now;
         }

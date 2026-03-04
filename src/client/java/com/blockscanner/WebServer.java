@@ -72,6 +72,7 @@ public class WebServer {
         server.createContext("/api/player", this::handlePlayer);
         server.createContext("/api/toggle", this::handleToggle);
         server.createContext("/api/config", this::handleConfig);
+        server.createContext("/api/navigate", this::handleNavigate);
         server.createContext("/api/clear", this::handleClear);
         
         server.setExecutor(Executors.newFixedThreadPool(4));
@@ -211,6 +212,7 @@ public class WebServer {
         Map<String, Object> traversal = new HashMap<>();
         traversal.put("enabled", traversalStatus.enabled());
         traversal.put("waitingForSpectator", traversalStatus.waitingForSpectator());
+        traversal.put("manualMode", traversalStatus.manualMode());
         traversal.put("batchSideChunks", traversalStatus.batchSideChunks());
         traversal.put("batchTotalChunks", traversalStatus.batchTotalChunks());
         traversal.put("currentDimension", traversalStatus.currentDimension());
@@ -222,6 +224,7 @@ public class WebServer {
         traversal.put("waypointsCompleted", traversalStatus.waypointsCompleted());
         traversal.put("batchChunksScanned", traversalStatus.batchChunksScanned());
         status.put("traversal", traversal);
+        status.put("navigation", buildNavigationResponse());
 
         String json = gson.toJson(status);
         
@@ -356,6 +359,7 @@ public class WebServer {
         Integer batchRadius = null;
         Boolean scanBlocksEnabled = null;
         Boolean scanEntitiesEnabled = null;
+        Boolean manualScanEnabled = null;
         Integer startChunkX = null;
         Integer startChunkZ = null;
         String startDimension = null;
@@ -382,6 +386,9 @@ public class WebServer {
         }
         if (payload != null && payload.has("scanEntitiesEnabled")) {
             scanEntitiesEnabled = toBoolean(payload.get("scanEntitiesEnabled"));
+        }
+        if (payload != null && payload.has("manualScanEnabled")) {
+            manualScanEnabled = toBoolean(payload.get("manualScanEnabled"));
         }
         if (payload != null && payload.has("startChunkX")) {
             startChunkX = toInteger(payload.get("startChunkX"));
@@ -425,7 +432,8 @@ public class WebServer {
             chunksPerTick,
             batchRadius,
             scanBlocksEnabled,
-            scanEntitiesEnabled
+            scanEntitiesEnabled,
+            manualScanEnabled
         );
         if (error != null) {
             Map<String, Object> response = buildConfigResponse();
@@ -452,6 +460,72 @@ public class WebServer {
         Map<String, Object> config = buildConfigResponse();
         String json = gson.toJson(config);
 
+        addCorsHeaders(exchange);
+        sendResponse(exchange, 200, "application/json", json);
+    }
+
+    /**
+     * Handles requests to /api/navigate - moves the player to a chunk or block target.
+     */
+    private void handleNavigate(HttpExchange exchange) throws IOException {
+        String method = exchange.getRequestMethod();
+        if ("OPTIONS".equals(method)) {
+            addCorsHeaders(exchange);
+            sendResponse(exchange, 204, "text/plain", "");
+            return;
+        }
+        if (!"POST".equals(method)) {
+            sendResponse(exchange, 405, "text/plain", "Method Not Allowed");
+            return;
+        }
+
+        String body = readRequestBody(exchange);
+        com.google.gson.JsonObject payload = gson.fromJson(body, com.google.gson.JsonObject.class);
+        Boolean cancel = payload != null && payload.has("cancel") ? toBoolean(payload.get("cancel")) : null;
+        Integer chunkX = payload != null && payload.has("chunkX") ? toInteger(payload.get("chunkX")) : null;
+        Integer chunkZ = payload != null && payload.has("chunkZ") ? toInteger(payload.get("chunkZ")) : null;
+        Integer blockX = payload != null && payload.has("blockX") ? toInteger(payload.get("blockX")) : null;
+        Integer blockZ = payload != null && payload.has("blockZ") ? toInteger(payload.get("blockZ")) : null;
+
+        Map<String, Object> response = new HashMap<>();
+        if (Boolean.TRUE.equals(cancel)) {
+            scanController.cancelNavigation();
+            response.put("message", "Navigation cancelled");
+            response.put("navigation", buildNavigationResponse());
+            String json = gson.toJson(response);
+            addCorsHeaders(exchange);
+            sendResponse(exchange, 200, "application/json", json);
+            return;
+        }
+
+        String error;
+        if (chunkX != null || chunkZ != null) {
+            if (chunkX == null || chunkZ == null) {
+                error = "chunkX and chunkZ must both be provided";
+            } else {
+                error = scanController.navigateToChunk(chunkX, chunkZ);
+            }
+        } else if (blockX != null || blockZ != null) {
+            if (blockX == null || blockZ == null) {
+                error = "blockX and blockZ must both be provided";
+            } else {
+                error = scanController.navigateToBlock(blockX, blockZ);
+            }
+        } else {
+            error = "Provide chunkX/chunkZ or blockX/blockZ, or set cancel=true";
+        }
+
+        response.put("navigation", buildNavigationResponse());
+        if (error != null) {
+            response.put("error", error);
+            String json = gson.toJson(response);
+            addCorsHeaders(exchange);
+            sendResponse(exchange, 400, "application/json", json);
+            return;
+        }
+
+        response.put("message", "Navigation started");
+        String json = gson.toJson(response);
         addCorsHeaders(exchange);
         sendResponse(exchange, 200, "application/json", json);
     }
@@ -611,6 +685,18 @@ public class WebServer {
             || lower.endsWith("_wall_hanging_sign");
     }
 
+    private Map<String, Object> buildNavigationResponse() {
+        ScanController.NavigationStatus navigationStatus = scanController.getNavigationStatusSnapshot();
+        Map<String, Object> navigation = new HashMap<>();
+        navigation.put("active", navigationStatus.active());
+        navigation.put("useChunkTarget", navigationStatus.useChunkTarget());
+        navigation.put("targetChunkX", navigationStatus.targetChunkX());
+        navigation.put("targetChunkZ", navigationStatus.targetChunkZ());
+        navigation.put("targetBlockX", navigationStatus.targetBlockX());
+        navigation.put("targetBlockZ", navigationStatus.targetBlockZ());
+        return navigation;
+    }
+
     private Map<String, Object> buildConfigResponse() {
         Map<String, Object> config = new HashMap<>();
         config.put("targetBlocks", scanController.getTargetBlocks());
@@ -621,6 +707,7 @@ public class WebServer {
         config.put("batchRadius", scanController.getBatchRadius());
         config.put("scanBlocksEnabled", scanController.isScanBlocksEnabled());
         config.put("scanEntitiesEnabled", scanController.isScanEntitiesEnabled());
+        config.put("manualScanEnabled", scanController.isManualScanEnabled());
         config.put("chunksPerTickMin", ScanController.getMinChunksPerTick());
         config.put("chunksPerTickMax", ScanController.getMaxChunksPerTick());
         config.put("batchRadiusMin", ScanController.getMinBatchRadius());
@@ -1038,6 +1125,11 @@ public class WebServer {
                                 <input id="entities-toggle" type="checkbox" />
                             </div>
                             <div class="config-row">
+                                <label for="manual-scan-toggle">Manual scan mode (no auto movement)</label>
+                                <input id="manual-scan-toggle" type="checkbox" />
+                            </div>
+                            <div class="config-note">Manual mode scans around your current chunk and does not follow waypoints.</div>
+                            <div class="config-row">
                                 <label for="chunks-per-tick">Chunks per tick (per enabled scanner)</label>
                                 <input id="chunks-per-tick" type="number" min="1" max="16" step="1" value="2" />
                             </div>
@@ -1057,6 +1149,26 @@ public class WebServer {
                                 </div>
                             </div>
                             <div class="config-note">Apply Start resets the spiral cursor for the current dimension and begins from that center chunk.</div>
+                            <div class="config-row">
+                                <label for="nav-chunk-x">Move player to chunk (no scan required)</label>
+                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                    <input id="nav-chunk-x" type="number" step="1" placeholder="chunkX" style="width: 110px;" />
+                                    <input id="nav-chunk-z" type="number" step="1" placeholder="chunkZ" style="width: 110px;" />
+                                    <button class="config-save" id="nav-use-player-chunk" type="button">Use Player Chunk</button>
+                                    <button class="config-save" id="nav-go-chunk" type="button">Go Chunk</button>
+                                </div>
+                            </div>
+                            <div class="config-row">
+                                <label for="nav-block-x">Move player to block (no scan required)</label>
+                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                    <input id="nav-block-x" type="number" step="1" placeholder="blockX" style="width: 110px;" />
+                                    <input id="nav-block-z" type="number" step="1" placeholder="blockZ" style="width: 110px;" />
+                                    <button class="config-save" id="nav-use-player-block" type="button">Use Player Block</button>
+                                    <button class="config-save" id="nav-go-block" type="button">Go Block</button>
+                                    <button class="config-danger" id="nav-stop" type="button">Stop Move</button>
+                                </div>
+                            </div>
+                            <div class="config-note" id="nav-status">Navigation idle.</div>
                             <div class="config-actions">
                                 <button class="config-save" id="config-save" type="button">Save Settings</button>
                                 <div class="config-status" id="config-status"></div>
@@ -1263,6 +1375,7 @@ public class WebServer {
                         document.getElementById('total-chunks').textContent = status.totalChunksScanned;
                         updateBlockCounts(status.blockCounts || {});
                         updateTraversalPanel(status.traversal || null);
+                        updateNavigationStatus(status.navigation || null);
                     }
 
                     function updateTraversalPanel(traversal) {
@@ -1279,9 +1392,12 @@ public class WebServer {
                         }
 
                         const enabled = Boolean(traversal?.enabled);
+                        const manualMode = Boolean(traversal?.manualMode);
                         const waiting = Boolean(traversal?.waitingForSpectator);
                         if (!enabled) {
                             stateEl.textContent = 'Inactive';
+                        } else if (manualMode) {
+                            stateEl.textContent = 'Manual Scan';
                         } else if (waiting) {
                             stateEl.textContent = 'Waiting for Spectator';
                         } else {
@@ -1818,6 +1934,7 @@ public class WebServer {
                 const signsPanel = document.getElementById('signs-panel');
                 const blocksToggle = document.getElementById('blocks-toggle');
                 const entitiesToggle = document.getElementById('entities-toggle');
+                const manualScanToggle = document.getElementById('manual-scan-toggle');
                 const chunksPerTickInput = document.getElementById('chunks-per-tick');
                 const batchRadiusInput = document.getElementById('batch-radius');
               
@@ -1838,6 +1955,9 @@ public class WebServer {
                 }
                 if (entitiesToggle) {
                   entitiesToggle.checked = Boolean(config.scanEntitiesEnabled ?? true);
+                }
+                if (manualScanToggle) {
+                  manualScanToggle.checked = Boolean(config.manualScanEnabled);
                 }
                 if (chunksPerTickInput) {
                   const minChunksPerTick = Number(config.chunksPerTickMin ?? 1);
@@ -1930,6 +2050,138 @@ public class WebServer {
                 zInput.value = String(chunkZ);
               }
 
+              function setNavigationChunkInputsFromPlayer() {
+                const xInput = document.getElementById('nav-chunk-x');
+                const zInput = document.getElementById('nav-chunk-z');
+                if (!xInput || !zInput) {
+                  return;
+                }
+                const chunkX = Number(playerData?.chunkX);
+                const chunkZ = Number(playerData?.chunkZ);
+                if (!Number.isInteger(chunkX) || !Number.isInteger(chunkZ)) {
+                  return;
+                }
+                xInput.value = String(chunkX);
+                zInput.value = String(chunkZ);
+              }
+
+              function setNavigationBlockInputsFromPlayer() {
+                const xInput = document.getElementById('nav-block-x');
+                const zInput = document.getElementById('nav-block-z');
+                if (!xInput || !zInput) {
+                  return;
+                }
+                const blockX = Number.isFinite(Number(playerData?.x)) ? Math.floor(Number(playerData.x)) : null;
+                const blockZ = Number.isFinite(Number(playerData?.z)) ? Math.floor(Number(playerData.z)) : null;
+                if (!Number.isInteger(blockX) || !Number.isInteger(blockZ)) {
+                  return;
+                }
+                xInput.value = String(blockX);
+                zInput.value = String(blockZ);
+              }
+
+              function updateNavigationStatus(nav) {
+                const navStatus = document.getElementById('nav-status');
+                if (!navStatus) {
+                  return;
+                }
+                if (!Boolean(nav?.active)) {
+                  navStatus.textContent = 'Navigation idle.';
+                  return;
+                }
+                if (Boolean(nav?.useChunkTarget)) {
+                  navStatus.textContent = `Moving to chunk ${nav?.targetChunkX ?? 0}, ${nav?.targetChunkZ ?? 0}`;
+                  return;
+                }
+                navStatus.textContent = `Moving to block ${nav?.targetBlockX ?? 0}, ${nav?.targetBlockZ ?? 0}`;
+              }
+
+              async function requestNavigation(targetType) {
+                const navStatus = document.getElementById('nav-status');
+                let payload = null;
+
+                if (targetType === 'chunk') {
+                  const chunkX = parseOptionalIntegerInput('nav-chunk-x');
+                  const chunkZ = parseOptionalIntegerInput('nav-chunk-z');
+                  if (!Number.isInteger(chunkX) || !Number.isInteger(chunkZ)) {
+                    if (navStatus) {
+                      navStatus.textContent = 'Enter valid chunk X and Z';
+                    }
+                    return;
+                  }
+                  payload = { chunkX, chunkZ };
+                } else if (targetType === 'block') {
+                  const blockX = parseOptionalIntegerInput('nav-block-x');
+                  const blockZ = parseOptionalIntegerInput('nav-block-z');
+                  if (!Number.isInteger(blockX) || !Number.isInteger(blockZ)) {
+                    if (navStatus) {
+                      navStatus.textContent = 'Enter valid block X and Z';
+                    }
+                    return;
+                  }
+                  payload = { blockX, blockZ };
+                } else {
+                  return;
+                }
+
+                if (navStatus) {
+                  navStatus.textContent = 'Starting navigation...';
+                }
+
+                try {
+                  const response = await fetch(apiUrl('/api/navigate'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                  });
+                  const responsePayload = await response.json();
+                  if (!response.ok) {
+                    if (navStatus) {
+                      navStatus.textContent = responsePayload?.error || 'Failed to start navigation';
+                    }
+                    return;
+                  }
+
+                  updateNavigationStatus(responsePayload?.navigation || null);
+                  await fetchData();
+                } catch (error) {
+                  console.error('Error starting navigation:', error);
+                  if (navStatus) {
+                    navStatus.textContent = 'Failed to start navigation';
+                  }
+                }
+              }
+
+              async function cancelNavigation() {
+                const navStatus = document.getElementById('nav-status');
+                if (navStatus) {
+                  navStatus.textContent = 'Stopping navigation...';
+                }
+
+                try {
+                  const response = await fetch(apiUrl('/api/navigate'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cancel: true })
+                  });
+                  const responsePayload = await response.json();
+                  if (!response.ok) {
+                    if (navStatus) {
+                      navStatus.textContent = responsePayload?.error || 'Failed to stop navigation';
+                    }
+                    return;
+                  }
+
+                  updateNavigationStatus(responsePayload?.navigation || null);
+                  await fetchData();
+                } catch (error) {
+                  console.error('Error stopping navigation:', error);
+                  if (navStatus) {
+                    navStatus.textContent = 'Failed to stop navigation';
+                  }
+                }
+              }
+
               async function applyTraversalStart() {
                 const statusEl = document.getElementById('config-status');
                 const startChunkX = parseOptionalIntegerInput('start-chunk-x');
@@ -2005,6 +2257,7 @@ public class WebServer {
                 const scanSigns = Boolean(document.getElementById('signs-toggle')?.checked);
                 const scanBlocksEnabled = Boolean(document.getElementById('blocks-toggle')?.checked);
                 const scanEntitiesEnabled = Boolean(document.getElementById('entities-toggle')?.checked);
+                const manualScanEnabled = Boolean(document.getElementById('manual-scan-toggle')?.checked);
                 const chunksPerTick = Number.parseInt(document.getElementById('chunks-per-tick')?.value ?? '', 10);
                 const batchRadius = Number.parseInt(document.getElementById('batch-radius')?.value ?? '', 10);
               
@@ -2037,7 +2290,8 @@ public class WebServer {
                     chunksPerTick: chunksPerTick,
                     batchRadius: batchRadius,
                     scanBlocksEnabled: scanBlocksEnabled,
-                    scanEntitiesEnabled: scanEntitiesEnabled
+                    scanEntitiesEnabled: scanEntitiesEnabled,
+                    manualScanEnabled: manualScanEnabled
                   })
                 });
             
@@ -2087,6 +2341,7 @@ public class WebServer {
                         document.getElementById('total-chunks').textContent = status.totalChunksScanned;
                         updateBlockCounts(status.blockCounts || {});
                         updateTraversalPanel(status.traversal || null);
+                        updateNavigationStatus(status.navigation || null);
                     }
 
                     function updateTraversalPanel(traversal) {
@@ -2103,9 +2358,12 @@ public class WebServer {
                         }
 
                         const enabled = Boolean(traversal?.enabled);
+                        const manualMode = Boolean(traversal?.manualMode);
                         const waiting = Boolean(traversal?.waitingForSpectator);
                         if (!enabled) {
                             stateEl.textContent = 'Inactive';
+                        } else if (manualMode) {
+                            stateEl.textContent = 'Manual Scan';
                         } else if (waiting) {
                             stateEl.textContent = 'Waiting for Spectator';
                         } else {
@@ -2465,6 +2723,11 @@ public class WebServer {
                 const saveButton = document.getElementById('config-save');
                 const startUsePlayerButton = document.getElementById('start-use-player');
                 const startApplyButton = document.getElementById('start-apply');
+                const navUsePlayerChunkButton = document.getElementById('nav-use-player-chunk');
+                const navGoChunkButton = document.getElementById('nav-go-chunk');
+                const navUsePlayerBlockButton = document.getElementById('nav-use-player-block');
+                const navGoBlockButton = document.getElementById('nav-go-block');
+                const navStopButton = document.getElementById('nav-stop');
                 const clearButton = document.getElementById('clear-button');
                 
                 if (targetBlocksInput) {
@@ -2485,6 +2748,21 @@ public class WebServer {
                 }
                 if (startApplyButton) {
                   startApplyButton.addEventListener('click', applyTraversalStart);
+                }
+                if (navUsePlayerChunkButton) {
+                  navUsePlayerChunkButton.addEventListener('click', setNavigationChunkInputsFromPlayer);
+                }
+                if (navGoChunkButton) {
+                  navGoChunkButton.addEventListener('click', () => requestNavigation('chunk'));
+                }
+                if (navUsePlayerBlockButton) {
+                  navUsePlayerBlockButton.addEventListener('click', setNavigationBlockInputsFromPlayer);
+                }
+                if (navGoBlockButton) {
+                  navGoBlockButton.addEventListener('click', () => requestNavigation('block'));
+                }
+                if (navStopButton) {
+                  navStopButton.addEventListener('click', cancelNavigation);
                 }
                 if (clearButton) {
                   clearButton.addEventListener('click', confirmClearData);
