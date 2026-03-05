@@ -1827,6 +1827,7 @@ public class WebServer {
               let lastBlocksTotal = -1;
               let lastIncludeSigns = null;
               let ticksSinceBlocksFetch = BLOCK_POLL_FALLBACK_TICKS;
+              let toggleRequestInFlight = false;
               
               const apiBase = window.location.protocol === 'file:' ? 'http://localhost:8080' : '';
             
@@ -2336,6 +2337,9 @@ public class WebServer {
                             toggleButton.textContent = 'Start Scanning';
                             toggleButton.className = 'toggle-button';
                         }
+                        if (!toggleRequestInFlight) {
+                            toggleButton.disabled = false;
+                        }
 
                         document.getElementById('total-blocks').textContent = status.totalBlocksFound;
                         document.getElementById('total-chunks').textContent = status.totalChunksScanned;
@@ -2394,7 +2398,7 @@ public class WebServer {
                   statusText.textContent = message;
                 }
                 if (toggleButton) {
-                  toggleButton.disabled = true;
+                  toggleButton.disabled = !toggleRequestInFlight;
                 }
               }
               
@@ -2841,6 +2845,10 @@ public class WebServer {
               async function toggleScanning() {
                 const toggleButton = document.getElementById('toggle-button');
                 const originalText = toggleButton?.textContent;
+                if (toggleRequestInFlight) {
+                  return;
+                }
+                toggleRequestInFlight = true;
                 
                 if (toggleButton) {
                   toggleButton.disabled = true;
@@ -2867,6 +2875,7 @@ public class WebServer {
                   console.error('Error toggling scanning:', error);
                   alert('Error communicating with server. Please try again.');
                 } finally {
+                  toggleRequestInFlight = false;
                   if (toggleButton) {
                     toggleButton.disabled = false;
                     toggleButton.textContent = originalText;
